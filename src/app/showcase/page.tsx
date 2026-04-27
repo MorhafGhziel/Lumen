@@ -89,7 +89,7 @@ export default function Showcase() {
             </span>
           </div>
 
-          <h1 className="mb-4 text-5xl font-bold tracking-tight sm:text-6xl">
+          <h1 className="mb-4 text-5x font-bold tracking-tight sm:text-6xl">
             Lumen
           </h1>
           <p className="max-w-2xl text-lg leading-relaxed text-[#a1a1aa]">
