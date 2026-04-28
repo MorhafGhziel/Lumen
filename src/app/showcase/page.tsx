@@ -104,7 +104,7 @@ export default function Showcase() {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
-          className="group  mb-16 overflow-hidden rounded-2xl border border-[#27272a] bg-[#111113]"
+          className="group relative mb-16 overflow-hidden rounded-2xl border border-[#27272a] bg-[#111113]"
         >
           {/* Browser chrome */}
           <div className="flex items-center gap-2 border-b border-[#27272a] px-4 py-3">
