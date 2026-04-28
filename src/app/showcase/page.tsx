@@ -93,7 +93,9 @@ export default function Showcase() {
             Lumen
           </h1>
           <p className="max-w-2xl text-lg leading-relaxed text-[#a1a1aa]">
-lumen is a hybrid infinite canvas and block document workspace
+            A workspace that doesn&apos;t make you choose between structured
+            docs and freeform thinking. Switch between a block editor and an
+            infinite canvas — same app, same data, zero context switching.
           </p>
         </motion.div>
 
