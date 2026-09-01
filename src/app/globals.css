@@ -223,9 +223,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Translucent rather than solid: a full-strength accent behind selected text
+   drops the contrast far enough that you cannot read what you just selected,
+   which matters most in the editor where selecting is how you format. */
 ::selection {
-  background: var(--flame);
-  color: var(--flame-ink);
+  background: color-mix(in oklab, var(--flame) 28%, transparent);
+  color: inherit;
 }
 
 /* Thin, theme-aware scrollbars */
@@ -254,6 +257,14 @@ button:disabled { cursor: not-allowed; }
   outline: 2px solid var(--flame);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
+}
+
+/* Text surfaces are the exception. A ring drawn around the paragraph you are
+   typing in boxes every line as you move down the page; the caret is already
+   the focus indicator for a text field, and it is the one people look for. */
+[contenteditable]:focus,
+[contenteditable]:focus-visible {
+  outline: none;
 }
 
 /* -- Type ---------------------------------------------------------------- */
