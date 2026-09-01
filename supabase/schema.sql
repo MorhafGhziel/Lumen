@@ -1,18 +1,22 @@
 -- =============================================================================
 -- Lumen schema
 -- =============================================================================
--- Run this whole file in the Supabase SQL editor.
+-- Paste this whole file into the Supabase SQL editor and run it.
 --
--- It is idempotent and non-destructive: safe to run on a brand new project, and
--- safe to re-run on one that already has rows. Every statement either creates
--- something that is missing or replaces a definition in place. No DROP TABLE,
--- no data loss.
+-- Safe on a brand new project and safe to re-run on one that already has rows.
+-- No DROP TABLE, no data loss.
 --
--- Replaces the old schema.sql + schema-v2.sql pair, which had to be applied in
--- the right order and left overlapping RLS policies behind.
+-- IMPORTANT: the SQL editor runs a script as ONE transaction, so a single
+-- failing statement rolls back everything before it. A few steps here touch
+-- objects the editor role may not own (triggers on auth.users, policies on
+-- storage.objects, the realtime publication). Those are wrapped so a
+-- permission error is reported as a NOTICE and skipped, rather than undoing
+-- the table changes that matter. Look at the Notices tab after running: if
+-- something was skipped it will say so, and the app still works without it.
+--
+-- Order is deliberate. Everything the app needs to load at all comes first.
 -- =============================================================================
 
--- Needed for gen_random_uuid() on older projects.
 create extension if not exists "pgcrypto";
 
 
@@ -43,84 +47,7 @@ $$;
 
 
 -- =============================================================================
--- 2. Profiles
--- =============================================================================
--- Reading display names straight off auth.users requires elevated privileges,
--- so mirror the few public fields into a table the app can actually query.
-
-create table if not exists public.profiles (
-  id           uuid primary key references auth.users(id) on delete cascade,
-  email        text,
-  display_name text,
-  avatar_url   text,
-  created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now()
-);
-
-alter table public.profiles enable row level security;
-
-drop policy if exists "profiles_select_own" on public.profiles;
-create policy "profiles_select_own" on public.profiles
-  for select using (auth.uid() = id);
-
-drop policy if exists "profiles_update_own" on public.profiles;
-create policy "profiles_update_own" on public.profiles
-  for update using (auth.uid() = id) with check (auth.uid() = id);
-
-drop policy if exists "profiles_insert_own" on public.profiles;
-create policy "profiles_insert_own" on public.profiles
-  for insert with check (auth.uid() = id);
-
-drop trigger if exists profiles_touch on public.profiles;
-create trigger profiles_touch before update on public.profiles
-  for each row execute function public.touch_updated_at();
-
--- Create the profile row as part of signup, inside the same transaction, so a
--- user can never exist without one.
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, email, display_name, avatar_url)
-  values (
-    new.id,
-    new.email,
-    coalesce(
-      new.raw_user_meta_data ->> 'full_name',
-      new.raw_user_meta_data ->> 'name',
-      split_part(coalesce(new.email, 'there'), '@', 1)
-    ),
-    new.raw_user_meta_data ->> 'avatar_url'
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created after insert on auth.users
-  for each row execute function public.handle_new_user();
-
--- Backfill anyone who signed up before this trigger existed.
-insert into public.profiles (id, email, display_name, avatar_url)
-select
-  u.id,
-  u.email,
-  coalesce(
-    u.raw_user_meta_data ->> 'full_name',
-    u.raw_user_meta_data ->> 'name',
-    split_part(coalesce(u.email, 'there'), '@', 1)
-  ),
-  u.raw_user_meta_data ->> 'avatar_url'
-from auth.users u
-on conflict (id) do nothing;
-
-
--- =============================================================================
--- 3. Folders
+-- 2. Folders
 -- =============================================================================
 
 create table if not exists public.folders (
@@ -152,7 +79,7 @@ create index if not exists folders_user_id_idx on public.folders (user_id, sort_
 
 
 -- =============================================================================
--- 4. Pages
+-- 3. Pages
 -- =============================================================================
 
 create table if not exists public.pages (
@@ -216,7 +143,7 @@ create index if not exists pages_public_idx    on public.pages (share_id) where 
 
 
 -- =============================================================================
--- 5. Sticky notes
+-- 4. Sticky notes
 -- =============================================================================
 
 create table if not exists public.sticky_notes (
@@ -262,7 +189,7 @@ create index if not exists sticky_notes_user_id_idx on public.sticky_notes (user
 
 
 -- =============================================================================
--- 6. Drawing strokes
+-- 5. Drawing strokes
 -- =============================================================================
 
 create table if not exists public.drawing_strokes (
@@ -290,7 +217,7 @@ create index if not exists drawing_strokes_user_id_idx on public.drawing_strokes
 
 
 -- =============================================================================
--- 7. Comments
+-- 6. Comments
 -- =============================================================================
 
 create table if not exists public.comments (
@@ -302,30 +229,6 @@ create table if not exists public.comments (
 );
 
 alter table public.comments add column if not exists author_name text not null default 'Anonymous';
-
--- Anyone may comment on a public page, including signed-out readers, so the
--- size limits have to live in the database rather than only in the form. Without
--- these, a stranger with the share link could post megabytes straight into the
--- table and burn through the free tier's storage.
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'comments_content_length'
-  ) then
-    alter table public.comments
-      add constraint comments_content_length
-      check (char_length(content) <= 4000);
-  end if;
-
-  if not exists (
-    select 1 from pg_constraint where conname = 'comments_author_name_length'
-  ) then
-    alter table public.comments
-      add constraint comments_author_name_length
-      check (char_length(author_name) <= 60);
-  end if;
-end
-$$;
 
 -- Carry over the old user_email column if this database still has one.
 do $$
@@ -344,6 +247,22 @@ $$;
 -- user_id must be nullable so a reader of a public page can comment without an
 -- account. The original NOT NULL made that impossible.
 alter table public.comments alter column user_id drop not null;
+
+-- Anyone may comment on a public page, including signed-out readers, so the
+-- size limits have to live in the database rather than only in the form.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'comments_content_length') then
+    alter table public.comments
+      add constraint comments_content_length check (char_length(content) <= 4000);
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'comments_author_name_length') then
+    alter table public.comments
+      add constraint comments_author_name_length check (char_length(author_name) <= 60);
+  end if;
+end
+$$;
 
 alter table public.comments enable row level security;
 
@@ -389,70 +308,167 @@ create index if not exists comments_page_id_idx on public.comments (page_id, cre
 
 
 -- =============================================================================
+-- 7. Profiles
+-- =============================================================================
+-- Reading display names straight off auth.users requires elevated privileges,
+-- so mirror the few public fields into a table the app can query.
+
+create table if not exists public.profiles (
+  id           uuid primary key references auth.users(id) on delete cascade,
+  email        text,
+  display_name text,
+  avatar_url   text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+
+drop policy if exists "profiles_select_own" on public.profiles;
+create policy "profiles_select_own" on public.profiles
+  for select using (auth.uid() = id);
+
+drop policy if exists "profiles_update_own" on public.profiles;
+create policy "profiles_update_own" on public.profiles
+  for update using (auth.uid() = id) with check (auth.uid() = id);
+
+drop policy if exists "profiles_insert_own" on public.profiles;
+create policy "profiles_insert_own" on public.profiles
+  for insert with check (auth.uid() = id);
+
+drop trigger if exists profiles_touch on public.profiles;
+create trigger profiles_touch before update on public.profiles
+  for each row execute function public.touch_updated_at();
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email, display_name, avatar_url)
+  values (
+    new.id,
+    new.email,
+    coalesce(
+      new.raw_user_meta_data ->> 'full_name',
+      new.raw_user_meta_data ->> 'name',
+      split_part(coalesce(new.email, 'there'), '@', 1)
+    ),
+    new.raw_user_meta_data ->> 'avatar_url'
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+-- Backfill anyone who already exists. This works regardless of whether the
+-- trigger below can be installed.
+insert into public.profiles (id, email, display_name, avatar_url)
+select
+  u.id,
+  u.email,
+  coalesce(
+    u.raw_user_meta_data ->> 'full_name',
+    u.raw_user_meta_data ->> 'name',
+    split_part(coalesce(u.email, 'there'), '@', 1)
+  ),
+  u.raw_user_meta_data ->> 'avatar_url'
+from auth.users u
+on conflict (id) do nothing;
+
+-- Creating a trigger on auth.users needs ownership of that table, which the
+-- SQL editor role does not always have. Guarded so a refusal cannot roll back
+-- everything above it. Without the trigger, the app falls back to auth
+-- metadata for the display name, so nothing visibly breaks.
+do $$
+begin
+  execute 'drop trigger if exists on_auth_user_created on auth.users';
+  execute 'create trigger on_auth_user_created after insert on auth.users '
+       || 'for each row execute function public.handle_new_user()';
+  raise notice 'Installed the auth.users signup trigger.';
+exception when others then
+  raise notice 'SKIPPED the auth.users trigger (%). Profiles are backfilled above; new signups fall back to auth metadata. Nothing else is affected.', sqlerrm;
+end
+$$;
+
+
+-- =============================================================================
 -- 8. Storage
 -- =============================================================================
+-- Guarded: policies on storage.objects require ownership the editor role may
+-- not have. If this is skipped, create the bucket by hand under Storage and
+-- image upload will work; everything else is unaffected.
 
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values (
-  'images', 'images', true,
-  5242880,  -- 5 MB, comfortably inside the free tier's 1 GB total
-  array['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml']
-)
-on conflict (id) do update
-  set public             = excluded.public,
-      file_size_limit    = excluded.file_size_limit,
-      allowed_mime_types = excluded.allowed_mime_types;
+do $$
+begin
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values (
+    'images', 'images', true,
+    5242880,  -- 5 MB, comfortably inside the free tier's 1 GB total
+    array['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml']
+  )
+  on conflict (id) do update
+    set public             = excluded.public,
+        file_size_limit    = excluded.file_size_limit,
+        allowed_mime_types = excluded.allowed_mime_types;
+  raise notice 'Images bucket ready.';
+exception when others then
+  raise notice 'SKIPPED the images bucket (%). Create a public bucket named "images" under Storage.', sqlerrm;
+end
+$$;
 
-drop policy if exists "Users can upload images" on storage.objects;
-drop policy if exists "Users can update own images" on storage.objects;
-drop policy if exists "Users can delete own images" on storage.objects;
-drop policy if exists "Anyone can read images" on storage.objects;
-drop policy if exists "images_insert_own_folder" on storage.objects;
-drop policy if exists "images_update_own" on storage.objects;
-drop policy if exists "images_delete_own" on storage.objects;
-drop policy if exists "images_select_public" on storage.objects;
+do $$
+begin
+  execute 'drop policy if exists "Users can upload images" on storage.objects';
+  execute 'drop policy if exists "Users can update own images" on storage.objects';
+  execute 'drop policy if exists "Users can delete own images" on storage.objects';
+  execute 'drop policy if exists "Anyone can read images" on storage.objects';
+  execute 'drop policy if exists "images_insert_own_folder" on storage.objects';
+  execute 'drop policy if exists "images_update_own" on storage.objects';
+  execute 'drop policy if exists "images_delete_own" on storage.objects';
+  execute 'drop policy if exists "images_select_public" on storage.objects';
 
--- Uploads must land in a folder named after the uploader's own id. The previous
--- policy only checked that the caller was authenticated, so any signed-in user
--- could write into any other user's folder.
-create policy "images_insert_own_folder" on storage.objects
-  for insert with check (
-    bucket_id = 'images'
-    and auth.uid()::text = (storage.foldername(name))[1]
-  );
+  -- Uploads must land in a folder named after the uploader's own id. The
+  -- previous policy only checked that the caller was authenticated, so any
+  -- signed-in user could write into any other user's folder.
+  execute 'create policy "images_insert_own_folder" on storage.objects '
+       || 'for insert with check (bucket_id = ''images'' '
+       || 'and auth.uid()::text = (storage.foldername(name))[1])';
 
-create policy "images_update_own" on storage.objects
-  for update using (
-    bucket_id = 'images' and auth.uid()::text = (storage.foldername(name))[1]
-  );
+  execute 'create policy "images_update_own" on storage.objects '
+       || 'for update using (bucket_id = ''images'' '
+       || 'and auth.uid()::text = (storage.foldername(name))[1])';
 
-create policy "images_delete_own" on storage.objects
-  for delete using (
-    bucket_id = 'images' and auth.uid()::text = (storage.foldername(name))[1]
-  );
+  execute 'create policy "images_delete_own" on storage.objects '
+       || 'for delete using (bucket_id = ''images'' '
+       || 'and auth.uid()::text = (storage.foldername(name))[1])';
 
-create policy "images_select_public" on storage.objects
-  for select using (bucket_id = 'images');
+  execute 'create policy "images_select_public" on storage.objects '
+       || 'for select using (bucket_id = ''images'')';
+
+  raise notice 'Storage policies installed.';
+exception when others then
+  raise notice 'SKIPPED storage policies (%). Set them under Storage > Policies if image upload misbehaves.', sqlerrm;
+end
+$$;
 
 
 -- =============================================================================
 -- 9. Realtime
 -- =============================================================================
--- Lets a second tab or device see edits without a refresh. Included in the
--- free tier; RLS still applies to every broadcast row.
-
-do $$
-begin
-  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    create publication supabase_realtime;
-  end if;
-end
-$$;
+-- Guarded: publications need elevated privileges. If skipped, the app still
+-- works — edits just will not stream to a second tab until you reload.
 
 do $$
 declare
   t text;
 begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    execute 'create publication supabase_realtime';
+  end if;
+
   foreach t in array array['pages', 'folders', 'sticky_notes', 'drawing_strokes', 'comments']
   loop
     if not exists (
@@ -462,18 +478,53 @@ begin
       execute format('alter publication supabase_realtime add table public.%I', t);
     end if;
   end loop;
+
+  -- Realtime sends only the primary key on UPDATE/DELETE unless replica
+  -- identity is full. Without this, a note moved in one tab would not move in
+  -- the other.
+  execute 'alter table public.pages           replica identity full';
+  execute 'alter table public.folders         replica identity full';
+  execute 'alter table public.sticky_notes    replica identity full';
+  execute 'alter table public.drawing_strokes replica identity full';
+  execute 'alter table public.comments        replica identity full';
+
+  raise notice 'Realtime configured.';
+exception when others then
+  raise notice 'SKIPPED realtime (%). The app works without it; edits just will not stream between tabs.', sqlerrm;
 end
 $$;
 
--- Realtime sends only the primary key on UPDATE/DELETE unless replica identity
--- is full. Without this, a note moved in one tab would not move in the other.
-alter table public.pages           replica identity full;
-alter table public.folders         replica identity full;
-alter table public.sticky_notes    replica identity full;
-alter table public.drawing_strokes replica identity full;
-alter table public.comments        replica identity full;
-
 
 -- =============================================================================
--- Done.
+-- 10. Report
 -- =============================================================================
+-- Confirms the columns the app actually needs. All should say true.
+
+do $$
+declare
+  ok boolean := true;
+  missing text := '';
+begin
+  if not exists (select 1 from information_schema.columns
+    where table_schema='public' and table_name='folders' and column_name='sort_order')
+  then ok := false; missing := missing || 'folders.sort_order '; end if;
+
+  if not exists (select 1 from information_schema.columns
+    where table_schema='public' and table_name='folders' and column_name='is_open')
+  then ok := false; missing := missing || 'folders.is_open '; end if;
+
+  if not exists (select 1 from information_schema.columns
+    where table_schema='public' and table_name='sticky_notes' and column_name='z_index')
+  then ok := false; missing := missing || 'sticky_notes.z_index '; end if;
+
+  if not exists (select 1 from information_schema.columns
+    where table_schema='public' and table_name='pages' and column_name='share_id')
+  then ok := false; missing := missing || 'pages.share_id '; end if;
+
+  if ok then
+    raise notice 'SUCCESS: every column Lumen needs is present.';
+  else
+    raise notice 'STILL MISSING: %. Re-run this file and read the errors.', missing;
+  end if;
+end
+$$;
