@@ -19,9 +19,16 @@ export function createBlock(type: BlockType = "text", content = ""): Block {
   return { id: newBlockId(), type, content };
 }
 
-/** Tolerant of empty, legacy plain-text, and malformed content. */
+/**
+ * Tolerant of empty, legacy plain-text, and malformed content.
+ *
+ * Deterministic: the same string always yields the same block ids. That matters
+ * because ids are rendered as `data-block-id`, and newBlockId() mixes in
+ * Date.now(), so a random id would differ between the server render and the
+ * client one and break hydration on any page rendered on both.
+ */
 export function parseBlocks(content: string): Block[] {
-  if (!content?.trim()) return [createBlock()];
+  if (!content?.trim()) return [{ id: "b1", type: "text", content: "" }];
 
   try {
     const parsed: unknown = JSON.parse(content);
@@ -36,8 +43,12 @@ export function parseBlocks(content: string): Block[] {
 
   return content
     .split("\n")
-    .map((line) => createBlock("text", plainTextToInline(line)))
-    .slice(0, 500);
+    .slice(0, 500)
+    .map((line, index) => ({
+      id: `b${index + 1}`,
+      type: "text" as const,
+      content: plainTextToInline(line),
+    }));
 }
 
 function isBlock(value: unknown): value is Block {
