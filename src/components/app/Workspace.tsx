@@ -2,25 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { PanelLeft } from "lucide-react";
 import { Sidebar } from "@/components/app/Sidebar";
 import { CommandPalette } from "@/components/app/CommandPalette";
 import { AiPanel } from "@/components/app/AiPanel";
 import { DocEditor } from "@/components/docs/DocEditor";
-import { CanvasBoard } from "@/components/canvas/CanvasBoard";
+import { CanvasPage } from "@/components/canvas/CanvasPage";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useImageUpload } from "@/hooks/useImageUpload";
 import { useConfetti } from "@/components/ui/Confetti";
-import type { AppMode } from "@/lib/types";
+import type { PageKind } from "@/lib/types";
 import { swift } from "@/lib/motion";
 
 /**
  * The application shell.
  *
- * Deliberately thin. It used to render a toolbar row of its own above whatever
- * the mode rendered, so there were always two bands of chrome stacked on top
- * of each other before you reached the page. Docs and Canvas are navigation,
- * so that switch moved into the sidebar, and each mode owns its single header.
+ * There is no global mode any more. A canvas is a kind of page, so it lives in
+ * the same tree and the same folders as a document, and what you see follows
+ * from what you opened. That removes a whole axis of state, and with it the
+ * question of what "Canvas" meant when a document was also open.
  */
 export function Workspace({
   userId,
@@ -36,7 +35,6 @@ export function Workspace({
   const upload = useImageUpload(userId);
   const fireConfetti = useConfetti();
 
-  const [mode, setMode] = useState<AppMode>("docs");
   const [chosenId, setChosenId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -54,11 +52,10 @@ export function Workspace({
   const selectedId = selectedPage?.id ?? null;
 
   const handleAddPage = useCallback(
-    async (folderId: string | null) => {
+    async (folderId: string | null, kind: PageKind = "doc") => {
       const isFirst = store.pages.length === 0;
-      const id = await store.addPage(folderId);
+      const id = await store.addPage(folderId, kind);
       setChosenId(id);
-      setMode("docs");
       // Only the very first page is worth celebrating. After that it is noise.
       if (isFirst) fireConfetti();
     },
@@ -78,12 +75,6 @@ export function Workspace({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
-      const target = e.target as HTMLElement | null;
-      const typing =
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
 
       if (meta && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -100,14 +91,11 @@ export function Workspace({
         setSidebarCollapsed((v) => !v);
         return;
       }
-      if (meta && e.key.toLowerCase() === "n" && !e.shiftKey) {
+      if (meta && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        void handleAddPage(null);
-        return;
+        // Shift makes it a canvas, matching the split button in the sidebar.
+        void handleAddPage(null, e.shiftKey ? "canvas" : "doc");
       }
-      // Bare shortcuts must never fire mid-sentence.
-      if (!meta && !typing && e.key.toLowerCase() === "d") setMode("docs");
-      if (!meta && !typing && e.key.toLowerCase() === "c") setMode("canvas");
     };
 
     window.addEventListener("keydown", onKey);
@@ -119,15 +107,10 @@ export function Workspace({
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-        mode={mode}
-        onModeChange={setMode}
         pages={store.pages}
         folders={store.folders}
         selectedId={selectedId}
-        onSelect={(id) => {
-          setChosenId(id);
-          setMode("docs");
-        }}
+        onSelect={setChosenId}
         onAddPage={handleAddPage}
         onDeletePage={handleDeletePage}
         onUpdatePage={store.updatePage}
@@ -165,14 +148,29 @@ export function Workspace({
         </AnimatePresence>
 
         <main id="main" className="relative flex min-h-0 flex-1">
-          {mode === "docs" ? (
+          {selectedPage?.kind === "canvas" ? (
+            <CanvasPage
+              key={selectedPage.id}
+              page={selectedPage}
+              status={store.status}
+              onUpdate={store.updatePage}
+              notes={store.notes.filter((n) => n.page_id === selectedPage.id)}
+              strokes={store.strokes.filter((s) => s.page_id === selectedPage.id)}
+              onAddNote={store.addNote}
+              onUpdateNote={store.updateNote}
+              onDeleteNote={store.deleteNote}
+              onAddStroke={store.addStroke}
+              onRemoveStrokes={store.removeStrokes}
+              onClearStrokes={store.clearStrokes}
+            />
+          ) : (
             <DocEditor
               key={selectedPage?.id ?? "empty"}
               page={selectedPage}
               loaded={store.loaded}
               status={store.status}
               onUpdate={store.updatePage}
-              onCreate={() => handleAddPage(null)}
+              onCreate={() => handleAddPage(null, "doc")}
               comments={store.comments}
               onLoadComments={store.loadComments}
               onAddComment={(pageId, content) => store.addComment(pageId, content, displayName)}
@@ -181,37 +179,7 @@ export function Workspace({
               userId={userId}
               onToggleAi={() => setAiOpen((v) => !v)}
               aiPanelOpen={aiOpen}
-              sidebarCollapsed={sidebarCollapsed}
-              onShowSidebar={() => setSidebarCollapsed(false)}
             />
-          ) : (
-            <div className="flex min-w-0 flex-1 flex-col">
-              <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-card px-3">
-                {sidebarCollapsed && (
-                  <button
-                    onClick={() => setSidebarCollapsed(false)}
-                    aria-label="Show sidebar"
-                    className="press rounded-lg p-1.5 text-ink-4 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
-                  >
-                    <PanelLeft className="size-4" />
-                  </button>
-                )}
-                <h1 className="text-[14px] font-semibold text-ink">Canvas</h1>
-                <p className="text-[12px] text-ink-4">
-                  Double-click to add a note · space to pan
-                </p>
-              </header>
-              <CanvasBoard
-                notes={store.notes}
-                strokes={store.strokes}
-                onAddNote={store.addNote}
-                onUpdateNote={store.updateNote}
-                onDeleteNote={store.deleteNote}
-                onAddStroke={store.addStroke}
-                onRemoveStrokes={store.removeStrokes}
-                onClearStrokes={store.clearStrokes}
-              />
-            </div>
           )}
 
           <AnimatePresence>
@@ -219,7 +187,7 @@ export function Workspace({
               <AiPanel
                 onClose={() => setAiOpen(false)}
                 pageTitle={selectedPage?.title ?? null}
-                pageContent={selectedPage?.content ?? null}
+                pageContent={selectedPage?.kind === "doc" ? selectedPage.content : null}
               />
             )}
           </AnimatePresence>
@@ -230,13 +198,10 @@ export function Workspace({
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         pages={store.pages}
-        onSelectPage={(id) => {
-          setChosenId(id);
-          setMode("docs");
-        }}
-        onNewPage={() => handleAddPage(null)}
-        onNewFolder={store.addFolder}
-        onSetMode={setMode}
+        onSelectPage={setChosenId}
+        onNewPage={() => handleAddPage(null, "doc")}
+        onNewCanvas={() => handleAddPage(null, "canvas")}
+        onNewFolder={() => store.addFolder()}
         onToggleAi={() => setAiOpen((v) => !v)}
       />
     </div>

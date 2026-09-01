@@ -23,7 +23,7 @@ import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { PageIcon } from "@/components/app/PageIcon";
 import { signOut } from "@/app/auth/actions";
-import type { AppMode, DocPage, Folder } from "@/lib/types";
+import type { DocPage, Folder, PageKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { menu, swift } from "@/lib/motion";
 
@@ -42,13 +42,11 @@ import { menu, swift } from "@/lib/motion";
 interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  mode: AppMode;
-  onModeChange: (mode: AppMode) => void;
   pages: DocPage[];
   folders: Folder[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onAddPage: (folderId: string | null) => void;
+  onAddPage: (folderId: string | null, kind: PageKind) => void;
   onDeletePage: (id: string) => void;
   onUpdatePage: (id: string, updates: Partial<DocPage>) => void;
   onAddFolder: () => void;
@@ -62,8 +60,6 @@ interface SidebarProps {
 export function Sidebar({
   collapsed,
   onToggleCollapsed,
-  mode,
-  onModeChange,
   pages,
   folders,
   selectedId,
@@ -80,6 +76,19 @@ export function Sidebar({
 }: SidebarProps) {
   const [filter, setFilter] = useState("");
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+
+  useEffect(() => {
+    if (!newOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-newmenu]")) setNewOpen(false);
+    };
+    const id = setTimeout(() => window.addEventListener("click", close), 0);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener("click", close);
+    };
+  }, [newOpen]);
 
   const favorites = useMemo(() => pages.filter((p) => p.is_favorite), [pages]);
   const rootPages = useMemo(
@@ -106,21 +115,10 @@ export function Sidebar({
         <IconButton label="Search" onClick={onOpenSearch}>
           <Search className="size-4" />
         </IconButton>
-        <IconButton label="New page" onClick={() => onAddPage(null)}>
-          <Plus className="size-4" />
-        </IconButton>
-        <IconButton
-          label="Documents"
-          active={mode === "docs"}
-          onClick={() => onModeChange("docs")}
-        >
+        <IconButton label="New document" onClick={() => onAddPage(null, "doc")}>
           <FileText className="size-4" />
         </IconButton>
-        <IconButton
-          label="Canvas"
-          active={mode === "canvas"}
-          onClick={() => onModeChange("canvas")}
-        >
+        <IconButton label="New canvas" onClick={() => onAddPage(null, "canvas")}>
           <PenLine className="size-4" />
         </IconButton>
         <div className="mt-auto">
@@ -182,35 +180,62 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* The primary action, styled as one rather than hidden among icons. */}
+      {/* The primary action. A document is what almost everyone wants, so it is
+          one click; the caret offers a canvas without making the common case
+          into a two-step choice. */}
       <div className="px-3 pb-3">
-        <button
-          onClick={() => onAddPage(null)}
-          className="press shelf flex w-full items-center justify-center gap-1.5 rounded-lg bg-flame py-2 text-[13px] font-medium text-flame-ink"
-        >
-          <Plus className="size-4" />
-          New page
-        </button>
-      </div>
+        <div className="flex gap-px">
+          <button
+            onClick={() => onAddPage(null, "doc")}
+            className="press shelf flex flex-1 items-center justify-center gap-1.5 rounded-l-lg bg-flame py-2 text-[13px] font-medium text-flame-ink"
+          >
+            <Plus className="size-4" />
+            New page
+          </button>
+          <div className="relative" data-newmenu>
+            <button
+              onClick={() => setNewOpen((v) => !v)}
+              aria-label="Choose a page type"
+              aria-expanded={newOpen}
+              className="press shelf flex h-full items-center rounded-r-lg bg-flame px-2 text-flame-ink"
+            >
+              <ChevronDown className={cn("size-3.5 transition-transform", newOpen && "rotate-180")} />
+            </button>
 
-      {/* Docs and Canvas are places you go, so they sit with the navigation
-          instead of in a toolbar above the document. */}
-      <nav className="px-2 pb-1" aria-label="Sections">
-        <NavRow
-          active={mode === "docs"}
-          onClick={() => onModeChange("docs")}
-          Icon={FileText}
-          label="Documents"
-          hint="D"
-        />
-        <NavRow
-          active={mode === "canvas"}
-          onClick={() => onModeChange("canvas")}
-          Icon={PenLine}
-          label="Canvas"
-          hint="C"
-        />
-      </nav>
+            <AnimatePresence>
+              {newOpen && (
+                <motion.div
+                  variants={menu}
+                  initial="hidden"
+                  animate="show"
+                  exit="exit"
+                  className="absolute right-0 top-full z-50 mt-1.5 w-[210px] rounded-xl border border-line bg-card p-1.5"
+                  style={{ boxShadow: "var(--lift-lg)" }}
+                >
+                  <NewItem
+                    Icon={FileText}
+                    label="Document"
+                    hint="Write in blocks"
+                    onClick={() => {
+                      setNewOpen(false);
+                      onAddPage(null, "doc");
+                    }}
+                  />
+                  <NewItem
+                    Icon={PenLine}
+                    label="Canvas"
+                    hint="Notes and sketching"
+                    onClick={() => {
+                      setNewOpen(false);
+                      onAddPage(null, "canvas");
+                    }}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
 
       <div className="mt-2 flex items-center gap-1 px-4 pb-1">
         <span className="label-mono flex-1 text-[9px]">
@@ -346,38 +371,30 @@ export function Sidebar({
 
 /* ── Pieces ───────────────────────────────────────────────────────────── */
 
-function NavRow({
-  active,
-  onClick,
+/** A row in the new-page menu. Each names what it is and what it is for. */
+function NewItem({
   Icon,
   label,
   hint,
+  onClick,
 }: {
-  active: boolean;
-  onClick: () => void;
   Icon: typeof FileText;
   label: string;
   hint: string;
+  onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors",
-        active ? "bg-flame-tint font-medium text-flame" : "text-ink-2 hover:bg-paper-sunk",
-      )}
+      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-paper-sunk"
     >
-      <Icon className={cn("size-4", active ? "text-flame" : "text-ink-4")} />
-      <span className="flex-1 text-left">{label}</span>
-      <kbd
-        className={cn(
-          "rounded border px-1 font-mono text-[10px] opacity-0 transition-opacity group-hover:opacity-100",
-          active ? "border-flame/30 text-flame" : "border-line text-ink-4",
-        )}
-      >
-        {hint}
-      </kbd>
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-paper-sunk text-ink-3">
+        <Icon className="size-3.5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium text-ink">{label}</span>
+        <span className="block text-[11px] text-ink-4">{hint}</span>
+      </span>
     </button>
   );
 }
@@ -582,7 +599,7 @@ function FolderRow({
   onDragOver: (over: boolean) => void;
   onDropPage: (pageId: string) => void;
   onSelect: (id: string) => void;
-  onAddPage: (folderId: string | null) => void;
+  onAddPage: (folderId: string | null, kind: PageKind) => void;
   onUpdate: (id: string, updates: Partial<Folder>) => void;
   onDelete: (id: string) => void;
   onUpdatePage: (id: string, updates: Partial<DocPage>) => void;
@@ -667,7 +684,7 @@ function FolderRow({
 
         <span className="hidden gap-0.5 group-hover:flex">
           <button
-            onClick={() => onAddPage(folder.id)}
+            onClick={() => onAddPage(folder.id, "doc")}
             aria-label={`Add a page to ${folder.name}`}
             className="rounded p-0.5 text-ink-4 hover:text-ink"
           >

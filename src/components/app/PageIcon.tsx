@@ -18,6 +18,7 @@ import {
   Notebook,
   Paperclip,
   Pencil,
+  PenLine,
   Pin,
   Rocket,
   Star,
@@ -35,6 +36,7 @@ import {
  */
 export const PAGE_ICONS: { name: string; Icon: LucideIcon; label: string }[] = [
   { name: "file", Icon: FileText, label: "Document" },
+  { name: "canvas", Icon: PenLine, label: "Canvas" },
   { name: "pencil", Icon: Pencil, label: "Draft" },
   { name: "notebook", Icon: Notebook, label: "Notebook" },
   { name: "clipboard", Icon: ClipboardList, label: "List" },

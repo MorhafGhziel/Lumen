@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
   MoreHorizontal,
-  PanelLeft,
   Copy,
   AlignLeft,
   Lightbulb,
@@ -66,8 +65,6 @@ interface DocEditorProps {
   status: SyncStatus;
   onToggleAi: () => void;
   aiPanelOpen: boolean;
-  sidebarCollapsed: boolean;
-  onShowSidebar: () => void;
 }
 
 export function DocEditor({
@@ -84,8 +81,6 @@ export function DocEditor({
   status,
   onToggleAi,
   aiPanelOpen,
-  sidebarCollapsed,
-  onShowSidebar,
 }: DocEditorProps) {
   const [blocks, setBlocks] = useState<Block[]>(() => parseBlocks(page?.content ?? ""));
   const [aiBusy, setAiBusy] = useState<AiAction | null>(null);
@@ -287,16 +282,6 @@ export function DocEditor({
           menu. What is left is the page you are on and the three things you
           actually do to it. */}
       <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-card px-3">
-        {sidebarCollapsed && (
-          <button
-            onClick={onShowSidebar}
-            aria-label="Show sidebar"
-            className="press rounded-lg p-1.5 text-ink-4 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
-          >
-            <PanelLeft className="size-4" />
-          </button>
-        )}
-
         <PageIcon name={page.icon} className="size-4 shrink-0 text-flame" />
         <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">
           {page.title || "Untitled"}

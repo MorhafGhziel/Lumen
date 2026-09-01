@@ -10,10 +10,9 @@ import {
   PenLine,
   Search,
   Sparkles,
-  FileText,
 } from "lucide-react";
 import { PageIcon } from "@/components/app/PageIcon";
-import type { AppMode, DocPage } from "@/lib/types";
+import type { DocPage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { swift } from "@/lib/motion";
 
@@ -41,7 +40,7 @@ interface PaletteProps {
   onSelectPage: (id: string) => void;
   onNewPage: () => void;
   onNewFolder: () => void;
-  onSetMode: (mode: AppMode) => void;
+  onNewCanvas: () => void;
   onToggleAi: () => void;
 }
 
@@ -66,7 +65,7 @@ function PaletteDialog({
   onSelectPage,
   onNewPage,
   onNewFolder,
-  onSetMode,
+  onNewCanvas,
   onToggleAi,
 }: PaletteProps) {
   const [query, setQuery] = useState("");
@@ -91,19 +90,11 @@ function PaletteDialog({
         group: "Actions",
       },
       {
-        id: "canvas",
-        label: "Go to canvas",
-        hint: "C",
+        id: "new-canvas",
+        label: "New canvas",
+        hint: "⌘⇧N",
         icon: <PenLine className="size-4" />,
-        run: () => onSetMode("canvas"),
-        group: "Actions",
-      },
-      {
-        id: "docs",
-        label: "Go to documents",
-        hint: "D",
-        icon: <FileText className="size-4" />,
-        run: () => onSetMode("docs"),
+        run: onNewCanvas,
         group: "Actions",
       },
       {
@@ -125,7 +116,7 @@ function PaletteDialog({
     }));
 
     return [...actions, ...pageCommands];
-  }, [pages, onNewPage, onNewFolder, onSetMode, onToggleAi, onSelectPage]);
+  }, [pages, onNewPage, onNewCanvas, onNewFolder, onToggleAi, onSelectPage]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
