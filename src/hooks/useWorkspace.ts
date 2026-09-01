@@ -37,11 +37,21 @@ const DRAG_DEBOUNCE = 220;
 
 /* ── Row mapping ──────────────────────────────────────────────────────── */
 
+/**
+ * Coerces a database value to a string for display.
+ *
+ * Rendering a non-string where React expects text takes the whole app down
+ * with "Objects are not valid as a React child", so a single bad row must not
+ * be able to blank the screen.
+ */
+const asText = (value: unknown, fallback: string): string =>
+  typeof value === "string" ? value : value == null ? fallback : String(value);
+
 const toPage = (r: PageRow): DocPage => ({
   id: r.id,
-  title: r.title ?? "",
-  content: r.content ?? "",
-  icon: r.icon ?? "file",
+  title: asText(r.title, ""),
+  content: asText(r.content, ""),
+  icon: asText(r.icon, "file"),
   folder_id: r.folder_id,
   is_favorite: r.is_favorite ?? false,
   cover_url: r.cover_url,
@@ -53,7 +63,7 @@ const toPage = (r: PageRow): DocPage => ({
 
 const toFolder = (r: FolderRow): Folder => ({
   id: r.id,
-  name: r.name ?? "Untitled folder",
+  name: asText(r.name, "Untitled folder"),
   parent_id: r.parent_id,
   is_open: r.is_open ?? true,
   sort_order: r.sort_order ?? 0,
@@ -62,7 +72,7 @@ const toFolder = (r: FolderRow): Folder => ({
 
 const toNote = (r: StickyNoteRow): StickyNote => ({
   id: r.id,
-  text: r.text ?? "",
+  text: asText(r.text, ""),
   color: (r.color ?? "butter") as StickyColor,
   x: r.x ?? 0,
   y: r.y ?? 0,
@@ -134,8 +144,8 @@ const toComment = (r: CommentRow): Comment => ({
   id: r.id,
   page_id: r.page_id,
   user_id: r.user_id,
-  content: r.content ?? "",
-  author_name: r.author_name ?? "Anonymous",
+  content: asText(r.content, ""),
+  author_name: asText(r.author_name, "Anonymous"),
   created_at: new Date(r.created_at).getTime(),
 });
 
@@ -474,8 +484,13 @@ export function useWorkspace(userId: string | undefined) {
   /* ── Folders ────────────────────────────────────────────────────────── */
 
   const addFolder = useCallback(
-    async (name = "New folder"): Promise<string> => {
+    async (rawName?: unknown): Promise<string> => {
       if (!userId) throw new Error("Not signed in");
+
+      // Anything that is not a string is discarded rather than trusted. A bare
+      // `onClick={addFolder}` hands this a SyntheticEvent, and a default
+      // parameter would happily accept it and store an object as the name.
+      const name = typeof rawName === "string" && rawName.trim() ? rawName.trim() : "New folder";
 
       const id = tempId();
       setFolders((prev) => [

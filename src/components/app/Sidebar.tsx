@@ -218,7 +218,11 @@ export function Sidebar({
         </span>
         {!matches && (
           <button
-            onClick={onAddFolder}
+            // Called through an arrow, not passed bare. React hands a click
+            // handler the event as its first argument, and addFolder's first
+            // argument is the folder name — so `onClick={onAddFolder}` named
+            // the folder after a SyntheticEvent and crashed on render.
+            onClick={() => onAddFolder()}
             title="New folder"
             aria-label="New folder"
             className="rounded p-1 text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink"
