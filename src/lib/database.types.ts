@@ -46,6 +46,8 @@ export type PageRow = {
   is_public: boolean;
   share_id: string;
   sort_order: number;
+  /** "doc" or "canvas". */
+  kind: string;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +55,7 @@ export type PageRow = {
 export type StickyNoteRow = {
   id: string;
   user_id: string;
+  page_id: string | null;
   text: string;
   color: string;
   x: number;
@@ -67,6 +70,7 @@ export type StickyNoteRow = {
 export type DrawStrokeRow = {
   id: string;
   user_id: string;
+  page_id: string | null;
   tool: string;
   points: Json;
   color: string;

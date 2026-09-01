@@ -1,4 +1,5 @@
-export type AppMode = "docs" | "canvas";
+/** A page is either a document or a canvas board. */
+export type PageKind = "doc" | "canvas";
 
 /* ── Folders ── */
 export interface Folder {
@@ -13,6 +14,7 @@ export interface Folder {
 /* ── Pages ── */
 export interface DocPage {
   id: string;
+  kind: PageKind;
   title: string;
   /** JSON-serialised Block[]. */
   content: string;
@@ -95,6 +97,7 @@ export const STICKY_COLORS: StickyColor[] = [
 
 export interface StickyNote {
   id: string;
+  page_id: string;
   text: string;
   color: StickyColor;
   x: number;
@@ -116,6 +119,7 @@ export interface DrawPoint {
 
 export interface DrawStroke {
   id: string;
+  page_id: string;
   tool: DrawTool;
   points: DrawPoint[];
   color: string;

@@ -99,6 +99,21 @@ alter table public.pages add column if not exists is_public  boolean not null de
 alter table public.pages add column if not exists share_id   text;
 alter table public.pages add column if not exists sort_order integer not null default 0;
 
+-- A page is either a document or a canvas. Canvas used to be a single global
+-- board per user, which meant you could not keep one per project or file it
+-- anywhere. Making it a kind of page puts canvases in the same tree, in the
+-- same folders, with the same sharing and favourites.
+alter table public.pages add column if not exists kind text not null default 'doc';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'pages_kind_check') then
+    alter table public.pages
+      add constraint pages_kind_check check (kind in ('doc', 'canvas'));
+  end if;
+end
+$$;
+
 -- Give every page a share token up front. The old client generated one with
 -- Math.random() (8 chars, predictable) only at the moment of sharing; this is
 -- 96 bits of CSPRNG entropy and exists before it is ever needed.
@@ -161,6 +176,11 @@ alter table public.sticky_notes add column if not exists z_index    integer not 
 alter table public.sticky_notes add column if not exists created_at timestamptz not null default now();
 alter table public.sticky_notes add column if not exists updated_at timestamptz not null default now();
 
+-- Notes belong to a canvas page rather than to the user at large, so a
+-- workspace can hold as many separate boards as it likes.
+alter table public.sticky_notes
+  add column if not exists page_id uuid references public.pages(id) on delete cascade;
+
 -- The palette was renamed to paper stocks. Map the old names across so existing
 -- notes keep a valid colour instead of falling back to a default.
 update public.sticky_notes set color = case color
@@ -206,6 +226,9 @@ create table if not exists public.drawing_strokes (
 -- could reorder overlapping strokes.
 alter table public.drawing_strokes add column if not exists created_at timestamptz not null default now();
 
+alter table public.drawing_strokes
+  add column if not exists page_id uuid references public.pages(id) on delete cascade;
+
 alter table public.drawing_strokes enable row level security;
 
 drop policy if exists "Users manage own strokes" on public.drawing_strokes;
@@ -214,6 +237,44 @@ create policy "drawing_strokes_all_own" on public.drawing_strokes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create index if not exists drawing_strokes_user_id_idx on public.drawing_strokes (user_id, created_at);
+
+
+-- =============================================================================
+-- 5b. Adopt orphaned canvas content
+-- =============================================================================
+-- Notes and strokes made before canvases were pages have no page to belong to.
+-- Give each affected user a single canvas page holding everything they had, so
+-- the old board survives the change intact rather than disappearing.
+
+do $$
+declare
+  owner_id uuid;
+  canvas_id uuid;
+begin
+  for owner_id in
+    select user_id from public.sticky_notes where page_id is null
+    union
+    select user_id from public.drawing_strokes where page_id is null
+  loop
+    insert into public.pages (user_id, title, icon, kind)
+    values (owner_id, 'Canvas', 'canvas', 'canvas')
+    returning id into canvas_id;
+
+    update public.sticky_notes
+      set page_id = canvas_id
+      where user_id = owner_id and page_id is null;
+
+    update public.drawing_strokes
+      set page_id = canvas_id
+      where user_id = owner_id and page_id is null;
+
+    raise notice 'Moved existing canvas content into a page for user %.', owner_id;
+  end loop;
+end
+$$;
+
+create index if not exists sticky_notes_page_id_idx    on public.sticky_notes (page_id);
+create index if not exists drawing_strokes_page_id_idx on public.drawing_strokes (page_id, created_at);
 
 
 -- =============================================================================
