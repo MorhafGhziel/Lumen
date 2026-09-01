@@ -779,8 +779,12 @@ function Row({
       )}
 
       {/* Always present, revealed on hover. Two separate affordances, because
-          one control that both inserts and opens a menu is a coin toss. */}
-      <div className="absolute left-9 top-0.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          one control that both inserts and opens a menu is a coin toss.
+
+          These live in the row's 72px left gutter and must fit inside it: two
+          24px buttons plus their gap need 50px, so starting them at 36px put
+          the drag handle 14px on top of the first character of every line. */}
+      <div className="absolute left-1 top-0.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
         <button
           onClick={() => onInsertAfter(block.id)}
           title="Add a block below"
@@ -816,7 +820,7 @@ function Row({
             animate="show"
             exit="exit"
             onClick={(e) => e.stopPropagation()}
-            className="absolute left-9 top-8 z-50 max-h-[380px] w-[236px] overflow-y-auto rounded-xl border border-line bg-card p-1.5"
+            className="absolute left-1 top-8 z-50 max-h-[380px] w-[236px] overflow-y-auto rounded-xl border border-line bg-card p-1.5"
             style={{ boxShadow: "var(--lift-lg)" }}
           >
             <MenuItem onClick={() => { onDuplicate(block.id); setMenuOpen(false); }}>
