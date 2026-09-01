@@ -1,4 +1,5 @@
 import type { Block, BlockType } from "@/lib/types";
+import { inlineToPlainText, plainTextToInline } from "@/lib/richtext";
 
 /**
  * Block document helpers.
@@ -35,7 +36,7 @@ export function parseBlocks(content: string): Block[] {
 
   return content
     .split("\n")
-    .map((line) => createBlock("text", line))
+    .map((line) => createBlock("text", plainTextToInline(line)))
     .slice(0, 500);
 }
 
@@ -62,32 +63,38 @@ export function serializeBlocks(blocks: Block[]): string {
  */
 export function blocksToPlainText(blocks: Block[]): string {
   return blocks
-    .map((block) => {
+    .flatMap((block): string[] => {
+      // Content is inline HTML, so the markup has to come off before anything
+      // counts words or sends this to a model.
+      const text = inlineToPlainText(block.content);
+
       switch (block.type) {
         case "h1":
-          return `# ${block.content}`;
+          return [`# ${text}`];
         case "h2":
-          return `## ${block.content}`;
+          return [`## ${text}`];
         case "h3":
-          return `### ${block.content}`;
+          return [`### ${text}`];
         case "bulleted_list":
-          return `- ${block.content}`;
+          return [`- ${text}`];
         case "numbered_list":
-          return `1. ${block.content}`;
+          return [`1. ${text}`];
         case "todo":
-          return `- [${block.checked ? "x" : " "}] ${block.content}`;
+          return [`- [${block.checked ? "x" : " "}] ${text}`];
         case "quote":
-          return `> ${block.content}`;
         case "callout":
-          return `> ${block.content}`;
+          return [`> ${text}`];
+        case "toggle":
+          // A folded section still counts: its content is part of the document.
+          return [`- ${text}`, ...(block.children ? [blocksToPlainText(block.children)] : [])];
         case "code":
-          return `\`\`\`\n${block.content}\n\`\`\``;
+          return [`\`\`\`\n${block.content}\n\`\`\``];
         case "divider":
-          return "---";
+          return ["---"];
         case "image":
-          return block.caption ? `[image: ${block.caption}]` : "[image]";
+          return [block.caption ? `[image: ${block.caption}]` : "[image]"];
         default:
-          return block.content;
+          return [text];
       }
     })
     .filter((line) => line.trim().length > 0)
@@ -124,30 +131,30 @@ export function plainTextToBlocks(text: string): Block[] {
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
-      blocks.push(createBlock(level === 1 ? "h1" : level === 2 ? "h2" : "h3", heading[2]));
+      blocks.push(createBlock(level === 1 ? "h1" : level === 2 ? "h2" : "h3", plainTextToInline(heading[2])));
       continue;
     }
 
     const todo = /^[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
     if (todo) {
-      blocks.push({ ...createBlock("todo", todo[2]), checked: todo[1].toLowerCase() === "x" });
+      blocks.push({ ...createBlock("todo", plainTextToInline(todo[2])), checked: todo[1].toLowerCase() === "x" });
       continue;
     }
 
     const bullet = /^[-*•]\s+(.*)$/.exec(line);
     if (bullet) {
-      blocks.push(createBlock("bulleted_list", bullet[1]));
+      blocks.push(createBlock("bulleted_list", plainTextToInline(bullet[1])));
       continue;
     }
 
     const numbered = /^\d+[.)]\s+(.*)$/.exec(line);
     if (numbered) {
-      blocks.push(createBlock("numbered_list", numbered[1]));
+      blocks.push(createBlock("numbered_list", plainTextToInline(numbered[1])));
       continue;
     }
 
     if (/^>\s?/.test(line)) {
-      blocks.push(createBlock("quote", line.replace(/^>\s?/, "")));
+      blocks.push(createBlock("quote", plainTextToInline(line.replace(/^>\s?/, ""))));
       continue;
     }
 
@@ -156,7 +163,7 @@ export function plainTextToBlocks(text: string): Block[] {
       continue;
     }
 
-    blocks.push(createBlock("text", line));
+    blocks.push(createBlock("text", plainTextToInline(line)));
   }
 
   if (inCode && codeLines.length > 0) {
@@ -174,6 +181,6 @@ export function wordCount(blocks: Block[]): number {
 
 /** First line of real text, used as a fallback page title. */
 export function deriveTitle(blocks: Block[]): string {
-  const first = blocks.find((b) => b.content.trim() && b.type !== "divider");
-  return first ? first.content.trim().slice(0, 80) : "";
+  const first = blocks.find((b) => inlineToPlainText(b.content).trim() && b.type !== "divider");
+  return first ? inlineToPlainText(first.content).trim().slice(0, 80) : "";
 }

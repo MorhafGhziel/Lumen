@@ -35,21 +35,35 @@ export type BlockType =
   | "bulleted_list"
   | "numbered_list"
   | "todo"
+  | "toggle"
   | "quote"
   | "callout"
   | "divider"
   | "code"
   | "image";
 
+/** Accent applied to a callout. */
+export type CalloutTone = "neutral" | "flame" | "sky" | "sprout" | "iris";
+
 export interface Block {
   id: string;
   type: BlockType;
+  /**
+   * Inline HTML, limited to the allowlist in lib/richtext. Plain text from
+   * before rich text existed remains valid, since text with no tags renders
+   * identically.
+   */
   content: string;
   checked?: boolean;
+  /** Toggle blocks only: whether the body is folded away. */
+  collapsed?: boolean;
+  /** Toggle blocks only: the folded content. */
+  children?: Block[];
   imageUrl?: string;
   /** Caption or alt text for image blocks. */
   caption?: string;
   language?: string;
+  tone?: CalloutTone;
 }
 
 /* ── Comments ── */
