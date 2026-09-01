@@ -5,63 +5,79 @@ export interface Folder {
   id: string;
   name: string;
   parent_id: string | null;
-  user_id?: string;
   is_open: boolean;
+  sort_order: number;
   created_at: number;
 }
 
-/* ── Docs Mode ── */
+/* ── Pages ── */
 export interface DocPage {
   id: string;
   title: string;
+  /** JSON-serialised Block[]. */
   content: string;
   icon: string;
   folder_id: string | null;
   is_favorite: boolean;
   cover_url: string | null;
   is_public: boolean;
-  share_id: string | null;
-  user_id?: string;
-  createdAt: number;
-  updatedAt: number;
+  share_id: string;
+  created_at: number;
+  updated_at: number;
 }
 
 /* ── Blocks ── */
 export type BlockType =
-  | "text" | "h1" | "h2" | "h3"
-  | "bulleted_list" | "numbered_list" | "todo"
-  | "quote" | "callout" | "divider" | "code" | "image";
-
-export interface BlockComment {
-  id: string;
-  text: string;
-  author: string;
-  timestamp: number;
-}
+  | "text"
+  | "h1"
+  | "h2"
+  | "h3"
+  | "bulleted_list"
+  | "numbered_list"
+  | "todo"
+  | "quote"
+  | "callout"
+  | "divider"
+  | "code"
+  | "image";
 
 export interface Block {
   id: string;
   type: BlockType;
   content: string;
   checked?: boolean;
-  color?: string;
-  bgColor?: string;
   imageUrl?: string;
-  comments?: BlockComment[];
+  /** Caption or alt text for image blocks. */
+  caption?: string;
+  language?: string;
 }
 
 /* ── Comments ── */
 export interface Comment {
   id: string;
-  user_id: string;
   page_id: string;
+  user_id: string | null;
   content: string;
-  user_email: string;
+  author_name: string;
   created_at: number;
 }
 
-/* ── Canvas Mode ── */
-export type StickyColor = "yellow" | "pink" | "blue" | "green" | "purple" | "orange";
+/* ── Canvas ── */
+/**
+ * Named after paper stocks rather than raw hues. The old names (yellow, pink,
+ * blue…) described the light theme only and made no sense once dark mode
+ * turned them into deep muted tones.
+ */
+export type StickyColor = "butter" | "blush" | "sky" | "sage" | "lilac" | "clay";
+
+export const STICKY_COLORS: StickyColor[] = [
+  "butter",
+  "blush",
+  "sky",
+  "sage",
+  "lilac",
+  "clay",
+];
 
 export interface StickyNote {
   id: string;
@@ -71,15 +87,17 @@ export interface StickyNote {
   y: number;
   width: number;
   height: number;
-  user_id?: string;
+  z_index: number;
 }
 
 /* ── Drawing ── */
-export type DrawTool = "pen" | "eraser" | "highlighter";
+export type DrawTool = "pen" | "highlighter" | "eraser";
 
 export interface DrawPoint {
   x: number;
   y: number;
+  /** Stylus pressure, 0–1. Falls back to 0.5 for mouse and touch. */
+  p?: number;
 }
 
 export interface DrawStroke {
@@ -102,4 +120,18 @@ export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** True while the response is still streaming in. */
+  streaming?: boolean;
+  error?: boolean;
 }
+
+export type AiAction =
+  | "summarize"
+  | "expand"
+  | "improve"
+  | "brainstorm"
+  | "fix"
+  | "outline";
+
+/* ── Sync status, surfaced in the UI ── */
+export type SyncStatus = "idle" | "saving" | "saved" | "error" | "offline";
