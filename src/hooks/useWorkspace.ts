@@ -12,6 +12,7 @@ import type {
   StickyColor,
   StickyNote,
   SyncStatus,
+  PageKind,
 } from "@/lib/types";
 import type {
   CommentRow,
@@ -49,6 +50,7 @@ const asText = (value: unknown, fallback: string): string =>
 
 const toPage = (r: PageRow): DocPage => ({
   id: r.id,
+  kind: r.kind === "canvas" ? "canvas" : "doc",
   title: asText(r.title, ""),
   content: asText(r.content, ""),
   icon: asText(r.icon, "file"),
@@ -72,6 +74,7 @@ const toFolder = (r: FolderRow): Folder => ({
 
 const toNote = (r: StickyNoteRow): StickyNote => ({
   id: r.id,
+  page_id: r.page_id ?? "",
   text: asText(r.text, ""),
   color: (r.color ?? "butter") as StickyColor,
   x: r.x ?? 0,
@@ -83,6 +86,7 @@ const toNote = (r: StickyNoteRow): StickyNote => ({
 
 const toStroke = (r: DrawStrokeRow): DrawStroke => ({
   id: r.id,
+  page_id: r.page_id ?? "",
   tool: (r.tool ?? "pen") as DrawStroke["tool"],
   // The column is jsonb, so its static type is Json. The shape is ours.
   points: (r.points ?? []) as unknown as DrawStroke["points"],
@@ -377,7 +381,7 @@ export function useWorkspace(userId: string | undefined) {
   /* ── Pages ──────────────────────────────────────────────────────────── */
 
   const addPage = useCallback(
-    async (folderId: string | null = null): Promise<string> => {
+    async (folderId: string | null = null, kind: PageKind = "doc"): Promise<string> => {
       if (!userId) throw new Error("Not signed in");
 
       const id = tempId();
@@ -388,9 +392,10 @@ export function useWorkspace(userId: string | undefined) {
       setPages((prev) => [
         {
           id,
+          kind,
           title: "",
           content: "",
-          icon: "file",
+          icon: kind === "canvas" ? "canvas" : "file",
           folder_id: folderId,
           is_favorite: false,
           cover_url: null,
@@ -408,7 +413,7 @@ export function useWorkspace(userId: string | undefined) {
       const insert = (async (): Promise<string | null> => {
         const { data, error: insertError } = await supabase
           .from("pages")
-          .insert({ user_id: userId, folder_id: folderId })
+          .insert({ user_id: userId, folder_id: folderId, kind, icon: kind === "canvas" ? "canvas" : "file" })
           .select()
           .single();
 
@@ -558,18 +563,20 @@ export function useWorkspace(userId: string | undefined) {
   /* ── Sticky notes ───────────────────────────────────────────────────── */
 
   const addNote = useCallback(
-    async (x: number, y: number, color: StickyColor): Promise<string> => {
+    async (pageId: string, x: number, y: number, color: StickyColor): Promise<string> => {
       if (!userId) throw new Error("Not signed in");
 
       const id = tempId();
-      const z = notes.reduce((max, n) => Math.max(max, n.z_index), 0) + 1;
-      const draft: StickyNote = { id, text: "", color, x, y, width: 220, height: 160, z_index: z };
+      // Stack above whatever is already on this board, not on every board.
+      const z =
+        notes.filter((n) => n.page_id === pageId).reduce((max, n) => Math.max(max, n.z_index), 0) + 1;
+      const draft: StickyNote = { id, page_id: pageId, text: "", color, x, y, width: 220, height: 160, z_index: z };
       setNotes((prev) => [...prev, draft]);
 
       const insert = (async (): Promise<string | null> => {
         const { data, error: insertError } = await supabase
           .from("sticky_notes")
-          .insert({ user_id: userId, color, x, y, width: 220, height: 160, z_index: z })
+          .insert({ user_id: userId, page_id: pageId, color, x, y, width: 220, height: 160, z_index: z })
           .select()
           .single();
 
@@ -628,14 +635,15 @@ export function useWorkspace(userId: string | undefined) {
    * be missed entirely.
    */
   const addStroke = useCallback(
-    async (stroke: DrawStroke) => {
+    async (pageId: string, stroke: Omit<DrawStroke, "page_id">) => {
       if (!userId) return;
-      setStrokes((prev) => [...prev, stroke]);
+      setStrokes((prev) => [...prev, { ...stroke, page_id: pageId }]);
 
       const { data, error: insertError } = await supabase
         .from("drawing_strokes")
         .insert({
           user_id: userId,
+          page_id: pageId,
           tool: stroke.tool,
           // jsonb column: the point array is our own shape, not generic Json.
           points: stroke.points as unknown as DrawStrokeRow["points"],
@@ -672,14 +680,17 @@ export function useWorkspace(userId: string | undefined) {
     [supabase, markError],
   );
 
-  const clearStrokes = useCallback(async () => {
+  const clearStrokes = useCallback(async (pageId: string) => {
     if (!userId) return;
     const snapshot = strokes;
-    setStrokes([]);
+    setStrokes((prev) => prev.filter((s) => s.page_id !== pageId));
+    // Scoped to this board. Clearing every stroke the account owns because you
+    // wanted one canvas emptied would be a spectacular way to lose work.
     const { error: deleteError } = await supabase
       .from("drawing_strokes")
       .delete()
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .eq("page_id", pageId);
     if (deleteError) {
       markError(describeDbError(deleteError, "Could not clear the drawing."));
       setStrokes(snapshot);

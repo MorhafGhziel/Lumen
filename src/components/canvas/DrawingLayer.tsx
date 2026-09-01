@@ -35,7 +35,8 @@ export function DrawingLayer({
   panX: number;
   panY: number;
   zoom: number;
-  onCommit: (stroke: DrawStroke) => void;
+  /** page_id is filled in by the store, which knows which board this is. */
+  onCommit: (stroke: Omit<DrawStroke, "page_id">) => void;
   onErase: (ids: string[]) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -77,6 +78,7 @@ export function DrawingLayer({
     if (live.length > 0) {
       drawStroke(ctx, {
         id: "live",
+        page_id: "",
         tool,
         points: live,
         color,

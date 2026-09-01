@@ -26,6 +26,7 @@ const INK_COLORS = ["#1a1714", "#ff6a1a", "#3f9ae8", "#1faa5b", "#d472cc", "#6f6
 const SIZES = [2, 4, 8];
 
 export function CanvasBoard({
+  pageId,
   notes,
   strokes,
   onAddNote,
@@ -35,14 +36,15 @@ export function CanvasBoard({
   onRemoveStrokes,
   onClearStrokes,
 }: {
+  pageId: string;
   notes: StickyNote[];
   strokes: DrawStroke[];
-  onAddNote: (x: number, y: number, color: StickyColor) => Promise<string>;
+  onAddNote: (pageId: string, x: number, y: number, color: StickyColor) => Promise<string>;
   onUpdateNote: (id: string, updates: Partial<StickyNote>) => void;
   onDeleteNote: (id: string) => void;
-  onAddStroke: (stroke: DrawStroke) => void;
+  onAddStroke: (pageId: string, stroke: Omit<DrawStroke, "page_id">) => void;
   onRemoveStrokes: (ids: string[]) => void;
-  onClearStrokes: () => void;
+  onClearStrokes: (pageId: string) => void;
 }) {
   // Destructured so the container ref stays a separate binding from the pan
   // and zoom state. Reading the view off an object that also carries a ref
@@ -76,10 +78,30 @@ export function CanvasBoard({
       const { x, y } = toCanvas(e.clientX, e.clientY);
       // Centre the new note under the cursor rather than hanging it off the
       // pointer's top-left.
-      void onAddNote(x - 110, y - 80, noteColor);
+      void onAddNote(pageId, x - 110, y - 80, noteColor);
     },
-    [mode, toCanvas, noteColor, onAddNote],
+    [mode, toCanvas, noteColor, onAddNote, pageId],
   );
+
+  /**
+   * Drops a note in the middle of whatever is currently on screen.
+   *
+   * Double-click was the only way to add one, and nothing said so. The sticky
+   * icon in the toolbar was a decorative label sitting right next to the
+   * colours, so it looked exactly like the button it was not.
+   */
+  const addNoteToView = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const { x, y } = toCanvas(
+      (rect?.left ?? 0) + (rect?.width ?? 0) / 2,
+      (rect?.top ?? 0) + (rect?.height ?? 0) / 2,
+    );
+    // Offset each new note slightly so a run of them fans out instead of
+    // stacking into one illegible pile.
+    const nudge = (notes.length % 6) * 18;
+    setMode("select");
+    void onAddNote(pageId, x - 110 + nudge, y - 80 + nudge, noteColor);
+  }, [containerRef, toCanvas, notes.length, onAddNote, pageId, noteColor]);
 
   const bringForward = useCallback(
     (id: string) => {
@@ -145,7 +167,7 @@ export function CanvasBoard({
             panX={view.panX}
             panY={view.panY}
             zoom={view.zoom}
-            onCommit={onAddStroke}
+            onCommit={(stroke) => onAddStroke(pageId, stroke)}
             onErase={onRemoveStrokes}
           />
         ) : (
@@ -179,9 +201,9 @@ export function CanvasBoard({
           <h2 className="mt-6 font-display text-2xl tracking-tight text-ink">
             An empty board
           </h2>
-          <p className="mt-2 max-w-[36ch] text-sm leading-relaxed text-ink-3">
-            Double-click anywhere to drop a note. Hold space to pan, and
-            ⌘-scroll to zoom.
+          <p className="mt-2 max-w-[38ch] text-sm leading-relaxed text-ink-3">
+            Press <strong className="font-medium text-ink-2">Add note</strong> below, or
+            double-click anywhere. Hold space to pan, ⌘-scroll to zoom.
           </p>
         </motion.div>
       )}
@@ -300,7 +322,17 @@ export function CanvasBoard({
               transition={swift}
               className="flex items-center gap-1 overflow-hidden whitespace-nowrap"
             >
-              <StickyIcon className="ml-1 size-3.5 shrink-0 text-ink-4" />
+              {/* A real button, labelled. The colours beside it choose what
+                  the next note looks like. */}
+              <button
+                onClick={addNoteToView}
+                className="press shelf flex shrink-0 items-center gap-1.5 rounded-full bg-flame px-3 py-1.5 text-[12px] font-medium text-flame-ink"
+                title="Add a note — or double-click the board"
+              >
+                <StickyIcon className="size-3.5" />
+                Add note
+              </button>
+              <span className="mx-1 h-5 w-px shrink-0 bg-line" aria-hidden />
               {STICKY_COLORS.map((c) => (
                 <button
                   key={c}
@@ -394,7 +426,7 @@ export function CanvasBoard({
                 </button>
                 <button
                   onClick={() => {
-                    onClearStrokes();
+                    onClearStrokes(pageId);
                     setConfirmClear(false);
                   }}
                   className="press shelf rounded-lg bg-danger px-3 py-2 text-[13px] font-medium text-white [--shelf-color:color-mix(in_oklab,var(--danger),black_28%)]"
