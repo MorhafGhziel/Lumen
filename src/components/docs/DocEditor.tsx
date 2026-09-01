@@ -14,18 +14,21 @@ import {
   Wand2,
   Minimize2,
   Globe,
+  ImageOff,
   ImagePlus,
   Loader2,
   Lock,
   MessageSquare,
   Send,
   Sparkles,
+  Star,
   Trash2,
   X,
 } from "lucide-react";
 import { BlockEditor } from "@/components/docs/BlockEditor";
 import { PageIcon, PAGE_ICONS } from "@/components/app/PageIcon";
 import { SyncBadge } from "@/components/app/SyncBadge";
+import { Breadcrumb } from "@/components/app/Breadcrumb";
 import { MiniDoc } from "@/components/graphics/UiFragments";
 import { CurvedArrow } from "@/components/graphics/Doodles";
 import { Button } from "@/components/ui/Button";
@@ -65,6 +68,10 @@ interface DocEditorProps {
   status: SyncStatus;
   onToggleAi: () => void;
   aiPanelOpen: boolean;
+  pages: DocPage[];
+  onSelectPage: (id: string) => void;
+  onToggleFavorite: () => void;
+  onTrash: () => void;
 }
 
 export function DocEditor({
@@ -81,6 +88,10 @@ export function DocEditor({
   status,
   onToggleAi,
   aiPanelOpen,
+  pages,
+  onSelectPage,
+  onToggleFavorite,
+  onTrash,
 }: DocEditorProps) {
   const [blocks, setBlocks] = useState<Block[]>(() => parseBlocks(page?.content ?? ""));
   const [aiBusy, setAiBusy] = useState<AiAction | null>(null);
@@ -282,13 +293,32 @@ export function DocEditor({
           menu. What is left is the page you are on and the three things you
           actually do to it. */}
       <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-card px-3">
-        <PageIcon name={page.icon} className="size-4 shrink-0 text-flame" />
-        <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">
-          {page.title || "Untitled"}
-        </h1>
+        <Breadcrumb page={page} pages={pages} onSelect={onSelectPage} />
         <SyncBadge status={status} />
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          <span className="mr-1 hidden text-[12px] text-ink-4 lg:block">
+            Edited{" "}
+            {new Date(page.updated_at).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+          </span>
+
+          <button
+            onClick={onToggleFavorite}
+            title={page.is_favorite ? "Remove from favourites" : "Add to favourites"}
+            aria-label={page.is_favorite ? "Remove from favourites" : "Add to favourites"}
+            aria-pressed={page.is_favorite}
+            className={cn(
+              "press rounded-lg p-1.5 transition-colors [--press-depth:1px]",
+              page.is_favorite
+                ? "text-tile-marigold"
+                : "text-ink-4 hover:bg-paper-sunk hover:text-ink",
+            )}
+          >
+            <Star className={cn("size-4", page.is_favorite && "fill-current")} />
+          </button>
           <button
             onClick={onToggleAi}
             title="Ask Lumen — Ctrl J"
@@ -480,10 +510,20 @@ export function DocEditor({
                         onUpdate(page.id, { cover_url: null });
                         setMoreOpen(false);
                       }}
-                      Icon={Trash2}
+                      Icon={ImageOff}
                       label="Remove the cover"
                     />
                   )}
+
+                  <div className="my-1 border-t border-line" />
+                  <MoreItem
+                    onClick={() => {
+                      setMoreOpen(false);
+                      onTrash();
+                    }}
+                    Icon={Trash2}
+                    label="Move to trash"
+                  />
                 </motion.div>
               )}
             </AnimatePresence>

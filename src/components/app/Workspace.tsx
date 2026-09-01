@@ -16,10 +16,9 @@ import { swift } from "@/lib/motion";
 /**
  * The application shell.
  *
- * There is no global mode any more. A canvas is a kind of page, so it lives in
- * the same tree and the same folders as a document, and what you see follows
- * from what you opened. That removes a whole axis of state, and with it the
- * question of what "Canvas" meant when a document was also open.
+ * There is no global mode, and no folders. A canvas is a kind of page and a
+ * page holds pages, so one tree covers everything and what you see follows
+ * from what you opened. Two concepts fewer than the version before it.
  */
 export function Workspace({
   userId,
@@ -52,9 +51,9 @@ export function Workspace({
   const selectedId = selectedPage?.id ?? null;
 
   const handleAddPage = useCallback(
-    async (folderId: string | null, kind: PageKind = "doc") => {
+    async (parentId: string | null, kind: PageKind = "doc") => {
       const isFirst = store.pages.length === 0;
-      const id = await store.addPage(folderId, kind);
+      const id = await store.addPage(parentId, kind);
       setChosenId(id);
       // Only the very first page is worth celebrating. After that it is noise.
       if (isFirst) fireConfetti();
@@ -62,10 +61,26 @@ export function Workspace({
     [store, fireConfetti],
   );
 
-  const handleDeletePage = useCallback(
+  const handleTrash = useCallback(
     (id: string) => {
-      store.deletePage(id);
+      store.trashPage(id);
       setChosenId((current) => (current === id ? null : current));
+    },
+    [store],
+  );
+
+  /** Copies a page and its content, but not its children. */
+  const handleDuplicate = useCallback(
+    async (id: string) => {
+      const source = store.pages.find((p) => p.id === id);
+      if (!source) return;
+      const copy = await store.addPage(source.parent_id, source.kind);
+      store.updatePage(copy, {
+        title: source.title ? `${source.title} copy` : "",
+        content: source.content,
+        icon: source.icon,
+      });
+      setChosenId(copy);
     },
     [store],
   );
@@ -108,15 +123,20 @@ export function Workspace({
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
         pages={store.pages}
-        folders={store.folders}
+        trashedPages={store.trashedPages}
         selectedId={selectedId}
         onSelect={setChosenId}
         onAddPage={handleAddPage}
-        onDeletePage={handleDeletePage}
-        onUpdatePage={store.updatePage}
-        onAddFolder={store.addFolder}
-        onUpdateFolder={store.updateFolder}
-        onDeleteFolder={store.deleteFolder}
+        onRename={(id, title) => store.updatePage(id, { title })}
+        onToggleFavorite={(id) => {
+          const page = store.pages.find((p) => p.id === id);
+          if (page) store.updatePage(id, { is_favorite: !page.is_favorite });
+        }}
+        onDuplicate={handleDuplicate}
+        onTrash={handleTrash}
+        onRestore={store.restorePage}
+        onDeleteForever={store.deletePageForever}
+        onMove={store.movePage}
         onOpenSearch={() => setPaletteOpen(true)}
         displayName={displayName}
         email={email}
@@ -177,6 +197,12 @@ export function Workspace({
               onDeleteComment={store.deleteComment}
               upload={upload}
               userId={userId}
+              pages={store.pages}
+              onSelectPage={setChosenId}
+              onToggleFavorite={() =>
+                selectedPage && store.updatePage(selectedPage.id, { is_favorite: !selectedPage.is_favorite })
+              }
+              onTrash={() => selectedPage && handleTrash(selectedPage.id)}
               onToggleAi={() => setAiOpen((v) => !v)}
               aiPanelOpen={aiOpen}
             />
@@ -201,7 +227,6 @@ export function Workspace({
         onSelectPage={setChosenId}
         onNewPage={() => handleAddPage(null, "doc")}
         onNewCanvas={() => handleAddPage(null, "canvas")}
-        onNewFolder={() => store.addFolder()}
         onToggleAi={() => setAiOpen((v) => !v)}
       />
     </div>

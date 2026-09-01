@@ -1,18 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronDown,
   ChevronsLeft,
+  Clock,
   FileText,
-  FolderPlus,
   LogOut,
-  MoreHorizontal,
   PanelLeft,
   PenLine,
-  Pencil,
   Plus,
+  RotateCcw,
   Search,
   Star,
   Trash2,
@@ -22,61 +21,64 @@ import Link from "next/link";
 import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { PageIcon } from "@/components/app/PageIcon";
+import { PageTree, type PageTreeHandlers } from "@/components/app/PageTree";
 import { signOut } from "@/app/auth/actions";
-import type { DocPage, Folder, PageKind } from "@/lib/types";
+import type { DocPage, PageKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { menu, swift } from "@/lib/motion";
 
 /**
  * Sidebar.
  *
- * Rebuilt to remove the duplication that made the old one confusing: it had a
- * search button and a separate filter input sitting on top of each other, and
- * the Docs/Canvas switch lived in a second toolbar row over in the document.
+ * Organised into the sections Notion uses, because they answer the two
+ * questions people actually have: what was I just doing, and where is
+ * everything. Recents is derived from when a page was last edited, so it costs
+ * no extra state and no extra write.
  *
- * Now there is one search field, and switching between documents and canvas is
- * navigation, which is what it actually is, so it belongs here beside the
- * things being navigated.
+ * There is one tree. Folders are gone — a page holds pages — which removed a
+ * concept rather than adding another.
  */
 
 interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   pages: DocPage[];
-  folders: Folder[];
+  trashedPages: DocPage[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onAddPage: (folderId: string | null, kind: PageKind) => void;
-  onDeletePage: (id: string) => void;
-  onUpdatePage: (id: string, updates: Partial<DocPage>) => void;
-  onAddFolder: () => void;
-  onUpdateFolder: (id: string, updates: Partial<Folder>) => void;
-  onDeleteFolder: (id: string) => void;
+  onAddPage: (parentId: string | null, kind: PageKind) => void;
+  onRename: (id: string, title: string) => void;
+  onToggleFavorite: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onTrash: (id: string) => void;
+  onRestore: (id: string) => void;
+  onDeleteForever: (id: string) => void;
+  /** Returns false when the move was refused, e.g. into its own child. */
+  onMove: (id: string, parentId: string | null) => boolean;
   onOpenSearch: () => void;
   displayName: string;
   email: string;
 }
 
-export function Sidebar({
-  collapsed,
-  onToggleCollapsed,
-  pages,
-  folders,
-  selectedId,
-  onSelect,
-  onAddPage,
-  onDeletePage,
-  onUpdatePage,
-  onAddFolder,
-  onUpdateFolder,
-  onDeleteFolder,
-  onOpenSearch,
-  displayName,
-  email,
-}: SidebarProps) {
+export function Sidebar(props: SidebarProps) {
+  const {
+    collapsed,
+    onToggleCollapsed,
+    pages,
+    trashedPages,
+    selectedId,
+    onSelect,
+    onAddPage,
+    onOpenSearch,
+    onMove,
+    displayName,
+    email,
+  } = props;
+
   const [filter, setFilter] = useState("");
-  const [dragOver, setDragOver] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [rootDrop, setRootDrop] = useState(false);
 
   useEffect(() => {
     if (!newOpen) return;
@@ -91,8 +93,11 @@ export function Sidebar({
   }, [newOpen]);
 
   const favorites = useMemo(() => pages.filter((p) => p.is_favorite), [pages]);
-  const rootPages = useMemo(
-    () => pages.filter((p) => !p.folder_id && !p.is_favorite),
+
+  // Recents come free from updated_at. Tracking views separately would mean
+  // another column and a write on every navigation.
+  const recents = useMemo(
+    () => [...pages].sort((a, b) => b.updated_at - a.updated_at).slice(0, 3),
     [pages],
   );
 
@@ -101,6 +106,17 @@ export function Sidebar({
     if (!q) return null;
     return pages.filter((p) => (p.title || "Untitled").toLowerCase().includes(q));
   }, [filter, pages]);
+
+  const handlers: PageTreeHandlers = {
+    selectedId,
+    onSelect,
+    onAddChild: onAddPage,
+    onRename: props.onRename,
+    onToggleFavorite: props.onToggleFavorite,
+    onDuplicate: props.onDuplicate,
+    onTrash: props.onTrash,
+    onMove,
+  };
 
   if (collapsed) {
     return (
@@ -112,15 +128,15 @@ export function Sidebar({
         >
           <PanelLeft className="size-4" />
         </button>
-        <IconButton label="Search" onClick={onOpenSearch}>
+        <RailButton label="Search" onClick={onOpenSearch}>
           <Search className="size-4" />
-        </IconButton>
-        <IconButton label="New document" onClick={() => onAddPage(null, "doc")}>
+        </RailButton>
+        <RailButton label="New document" onClick={() => onAddPage(null, "doc")}>
           <FileText className="size-4" />
-        </IconButton>
-        <IconButton label="New canvas" onClick={() => onAddPage(null, "canvas")}>
+        </RailButton>
+        <RailButton label="New canvas" onClick={() => onAddPage(null, "canvas")}>
           <PenLine className="size-4" />
-        </IconButton>
+        </RailButton>
         <div className="mt-auto">
           <ThemeToggle />
         </div>
@@ -129,7 +145,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col border-r border-line bg-card">
+    <aside className="flex w-[264px] shrink-0 flex-col border-r border-line bg-card">
       <div className="flex items-center gap-2 px-3 pb-1 pt-3">
         <Link href="/" className="flex items-center gap-2 rounded-md" aria-label="Lumen home">
           <Logo size={22} className="text-flame" />
@@ -144,17 +160,13 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* One search field. It filters the list as you type; the same box tells
-          you the palette exists for everything else. */}
       <div className="px-3 pb-2 pt-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-4" />
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setFilter("");
-            }}
+            onKeyDown={(e) => e.key === "Escape" && setFilter("")}
             placeholder="Search pages"
             aria-label="Search pages"
             className="h-9 w-full rounded-lg border border-line bg-paper-sunk pl-8 pr-8 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-4 focus:border-flame"
@@ -180,9 +192,6 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* The primary action. A document is what almost everyone wants, so it is
-          one click; the caret offers a canvas without making the common case
-          into a two-step choice. */}
       <div className="px-3 pb-3">
         <div className="flex gap-px">
           <button
@@ -237,112 +246,146 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="mt-2 flex items-center gap-1 px-4 pb-1">
-        <span className="label-mono flex-1 text-[9px]">
-          {matches ? `${matches.length} found` : "Pages"}
-        </span>
-        {!matches && (
-          <button
-            // Called through an arrow, not passed bare. React hands a click
-            // handler the event as its first argument, and addFolder's first
-            // argument is the folder name — so `onClick={onAddFolder}` named
-            // the folder after a SyntheticEvent and crashed on render.
-            onClick={() => onAddFolder()}
-            title="New folder"
-            aria-label="New folder"
-            className="rounded p-1 text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink"
-          >
-            <FolderPlus className="size-3.5" />
-          </button>
-        )}
-      </div>
-
       <div className="flex-1 overflow-y-auto px-2 pb-3">
         {matches ? (
-          matches.length === 0 ? (
-            <Empty>Nothing matches “{filter}”.</Empty>
-          ) : (
-            matches.map((page) => (
-              <PageRow
-                key={page.id}
-                page={page}
-                selected={selectedId === page.id}
-                onSelect={onSelect}
-                onUpdate={onUpdatePage}
-                onDelete={onDeletePage}
-              />
-            ))
-          )
-        ) : (
-          <>
-            {favorites.length > 0 && (
-              <div className="mb-2">
-                {favorites.map((page) => (
-                  <PageRow
-                    key={page.id}
-                    page={page}
-                    selected={selectedId === page.id}
-                    onSelect={onSelect}
-                    onUpdate={onUpdatePage}
-                    onDelete={onDeletePage}
-                  />
-                ))}
-                <div className="mx-2 my-2 border-t border-line" />
-              </div>
-            )}
-
-            {folders.map((folder) => (
-              <FolderRow
-                key={folder.id}
-                folder={folder}
-                pages={pages.filter((p) => p.folder_id === folder.id)}
-                selectedId={selectedId}
-                dragOver={dragOver === folder.id}
-                onDragOver={(over) => setDragOver(over ? folder.id : null)}
-                onDropPage={(pageId) => onUpdatePage(pageId, { folder_id: folder.id })}
-                onSelect={onSelect}
-                onAddPage={onAddPage}
-                onUpdate={onUpdateFolder}
-                onDelete={onDeleteFolder}
-                onUpdatePage={onUpdatePage}
-                onDeletePage={onDeletePage}
-              />
-            ))}
-
-            {/* Dropping here pulls a page back out to the top level. */}
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const pageId = e.dataTransfer.getData("text/lumen-page");
-                if (pageId) onUpdatePage(pageId, { folder_id: null });
-              }}
-              className="min-h-[40px]"
-            >
-              {rootPages.map((page) => (
-                <PageRow
+          <Section label={`${matches.length} found`}>
+            {matches.length === 0 ? (
+              <Empty>Nothing matches “{filter}”.</Empty>
+            ) : (
+              matches.map((page) => (
+                <FlatRow
                   key={page.id}
                   page={page}
                   selected={selectedId === page.id}
                   onSelect={onSelect}
-                  onUpdate={onUpdatePage}
-                  onDelete={onDeletePage}
                 />
-              ))}
-            </div>
-
-            {pages.length === 0 && folders.length === 0 && (
-              <Empty>No pages yet. Make one above.</Empty>
+              ))
             )}
+          </Section>
+        ) : (
+          <>
+            {recents.length > 0 && (
+              <Section label="Recent" Icon={Clock}>
+                {recents.map((page) => (
+                  <FlatRow
+                    key={page.id}
+                    page={page}
+                    selected={selectedId === page.id}
+                    onSelect={onSelect}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {favorites.length > 0 && (
+              <Section label="Favourites" Icon={Star}>
+                {favorites.map((page) => (
+                  <FlatRow
+                    key={page.id}
+                    page={page}
+                    selected={selectedId === page.id}
+                    onSelect={onSelect}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {/* Dropping in this region but not on a row moves a page to the top
+                level. It is the only way to drag something back out of a deep
+                branch. */}
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setRootDrop(true);
+              }}
+              onDragLeave={() => setRootDrop(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setRootDrop(false);
+                const dragged = e.dataTransfer.getData("text/lumen-page");
+                if (dragged) onMove(dragged, null);
+              }}
+              className={cn(
+                "min-h-[140px] rounded-lg transition-colors",
+                rootDrop && "bg-flame-tint/40 ring-1 ring-flame/30",
+              )}
+            >
+              <Section label="Pages">
+                {pages.length === 0 ? (
+                  <Empty>No pages yet. Make one above.</Empty>
+                ) : (
+                  <PageTree pages={pages} handlers={handlers} />
+                )}
+              </Section>
+            </div>
           </>
         )}
       </div>
 
-      {/* Footer. The avatar and the name were overlapping; the row is now a
-          proper grid so neither can sit on the other. */}
+      {/* Trash. Deleting is reversible now, so there has to be somewhere to
+          reverse it from. */}
+      <div className="border-t border-line px-2 py-1.5">
+        <button
+          onClick={() => setTrashOpen((v) => !v)}
+          aria-expanded={trashOpen}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-ink-3 transition-colors hover:bg-paper-sunk hover:text-ink"
+        >
+          <Trash2 className="size-3.5" />
+          <span className="flex-1 text-left">Trash</span>
+          {trashedPages.length > 0 && (
+            <span className="rounded-full bg-paper-sunk px-1.5 text-[11px] text-ink-4">
+              {trashedPages.length}
+            </span>
+          )}
+        </button>
+
+        <AnimatePresence initial={false}>
+          {trashOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ ...swift, opacity: { duration: 0.12 } }}
+              className="overflow-hidden"
+            >
+              {trashedPages.length === 0 ? (
+                <p className="px-3 py-3 text-[12px] text-ink-4">Nothing deleted.</p>
+              ) : (
+                <div className="max-h-[240px] overflow-y-auto pt-1">
+                  {trashedPages.map((page) => (
+                    <div
+                      key={page.id}
+                      className="group flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-ink-3 hover:bg-paper-sunk"
+                    >
+                      <PageIcon name={page.icon} className="size-3.5 shrink-0 text-ink-4" />
+                      <span className="min-w-0 flex-1 truncate">{page.title || "Untitled"}</span>
+                      <span className="hidden shrink-0 gap-0.5 group-hover:flex">
+                        <button
+                          onClick={() => props.onRestore(page.id)}
+                          title="Restore"
+                          aria-label={`Restore ${page.title || "Untitled"}`}
+                          className="rounded p-0.5 text-ink-4 hover:text-flame"
+                        >
+                          <RotateCcw className="size-3" />
+                        </button>
+                        <button
+                          onClick={() => props.onDeleteForever(page.id)}
+                          title="Delete permanently"
+                          aria-label={`Delete ${page.title || "Untitled"} permanently`}
+                          className="rounded p-0.5 text-ink-4 hover:text-danger"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 border-t border-line px-3 py-2.5">
         <span className="flex size-7 items-center justify-center rounded-full bg-flame-tint text-[12px] font-semibold text-flame">
           {displayName.charAt(0).toUpperCase()}
@@ -371,7 +414,53 @@ export function Sidebar({
 
 /* ── Pieces ───────────────────────────────────────────────────────────── */
 
-/** A row in the new-page menu. Each names what it is and what it is for. */
+function Section({
+  label,
+  Icon,
+  children,
+}: {
+  label: string;
+  Icon?: typeof Star;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mb-3">
+      <p className="label-mono flex items-center gap-1.5 px-2 pb-1 pt-1 text-[9px]">
+        {Icon && <Icon className="size-3" />}
+        {label}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+/** A row with no tree behaviour, for Recents, Favourites and search results. */
+function FlatRow({
+  page,
+  selected,
+  onSelect,
+}: {
+  page: DocPage;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(page.id)}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors",
+        selected ? "bg-flame-tint font-medium text-flame" : "text-ink-2 hover:bg-paper-sunk",
+      )}
+    >
+      <PageIcon
+        name={page.icon}
+        className={cn("size-3.5 shrink-0", selected ? "text-flame" : "text-ink-4")}
+      />
+      <span className="min-w-0 flex-1 truncate">{page.title || "Untitled"}</span>
+    </button>
+  );
+}
+
 function NewItem({
   Icon,
   label,
@@ -399,26 +488,21 @@ function NewItem({
   );
 }
 
-function IconButton({
+function RailButton({
   children,
   label,
   onClick,
-  active,
 }: {
   children: React.ReactNode;
   label: string;
   onClick: () => void;
-  active?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={cn(
-        "press rounded-lg p-2 transition-colors [--press-depth:1px]",
-        active ? "bg-flame-tint text-flame" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
-      )}
+      className="press rounded-lg p-2 text-ink-3 transition-colors hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
     >
       {children}
     </button>
@@ -426,317 +510,5 @@ function IconButton({
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-3 py-8 text-center text-[13px] leading-relaxed text-ink-4">{children}</p>;
-}
-
-function PageRow({
-  page,
-  selected,
-  onSelect,
-  onUpdate,
-  onDelete,
-  indent,
-}: {
-  page: DocPage;
-  selected: boolean;
-  onSelect: (id: string) => void;
-  onUpdate: (id: string, updates: Partial<DocPage>) => void;
-  onDelete: (id: string) => void;
-  indent?: boolean;
-}) {
-  const [renaming, setRenaming] = useState(false);
-  const [value, setValue] = useState(page.title);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (renaming) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [renaming]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = () => setMenuOpen(false);
-    const id = setTimeout(() => window.addEventListener("click", close), 0);
-    return () => {
-      clearTimeout(id);
-      window.removeEventListener("click", close);
-    };
-  }, [menuOpen]);
-
-  const commit = () => {
-    setRenaming(false);
-    const next = value.trim();
-    if (next !== page.title) onUpdate(page.id, { title: next });
-  };
-
-  return (
-    <div
-      draggable={!renaming}
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/lumen-page", page.id);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      onClick={() => !renaming && onSelect(page.id)}
-      className={cn(
-        "group relative flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors",
-        indent && "ml-4",
-        selected ? "bg-flame-tint font-medium text-flame" : "text-ink-2 hover:bg-paper-sunk",
-      )}
-    >
-      <PageIcon name={page.icon} className={cn("size-3.5 shrink-0", !selected && "text-ink-4")} />
-
-      {renaming ? (
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            if (e.key === "Escape") {
-              setValue(page.title);
-              setRenaming(false);
-            }
-          }}
-          onClick={(e) => e.stopPropagation()}
-          className="min-w-0 flex-1 rounded bg-card px-1 py-0.5 text-[13px] text-ink outline-none ring-1 ring-flame"
-        />
-      ) : (
-        <span className="min-w-0 flex-1 truncate">{page.title || "Untitled"}</span>
-      )}
-
-      {!renaming && (
-        <>
-          {page.is_favorite && (
-            <Star className="size-3 shrink-0 fill-tile-marigold text-tile-marigold group-hover:hidden" />
-          )}
-          <span className="hidden items-center gap-0.5 group-hover:flex">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onUpdate(page.id, { is_favorite: !page.is_favorite });
-              }}
-              aria-label={page.is_favorite ? "Remove from favourites" : "Add to favourites"}
-              className={cn(
-                "rounded p-0.5 transition-colors",
-                page.is_favorite ? "text-tile-marigold" : "text-ink-4 hover:text-tile-marigold",
-              )}
-            >
-              <Star className={cn("size-3", page.is_favorite && "fill-current")} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setMenuOpen((v) => !v);
-              }}
-              aria-label="Page options"
-              className="rounded p-0.5 text-ink-4 hover:text-ink"
-            >
-              <MoreHorizontal className="size-3" />
-            </button>
-          </span>
-        </>
-      )}
-
-      <AnimatePresence>
-        {menuOpen && (
-          <motion.div
-            variants={menu}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-1 top-full z-50 mt-1 min-w-[150px] rounded-xl border border-line bg-card p-1"
-            style={{ boxShadow: "var(--lift-md)" }}
-          >
-            <button
-              onClick={() => {
-                setValue(page.title);
-                setRenaming(true);
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-2 hover:bg-paper-sunk hover:text-ink"
-            >
-              <Pencil className="size-3.5" /> Rename
-            </button>
-            <button
-              onClick={() => {
-                onDelete(page.id);
-                setMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-danger hover:bg-danger-tint"
-            >
-              <Trash2 className="size-3.5" /> Delete
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function FolderRow({
-  folder,
-  pages,
-  selectedId,
-  dragOver,
-  onDragOver,
-  onDropPage,
-  onSelect,
-  onAddPage,
-  onUpdate,
-  onDelete,
-  onUpdatePage,
-  onDeletePage,
-}: {
-  folder: Folder;
-  pages: DocPage[];
-  selectedId: string | null;
-  dragOver: boolean;
-  onDragOver: (over: boolean) => void;
-  onDropPage: (pageId: string) => void;
-  onSelect: (id: string) => void;
-  onAddPage: (folderId: string | null, kind: PageKind) => void;
-  onUpdate: (id: string, updates: Partial<Folder>) => void;
-  onDelete: (id: string) => void;
-  onUpdatePage: (id: string, updates: Partial<DocPage>) => void;
-  onDeletePage: (id: string) => void;
-}) {
-  const [renaming, setRenaming] = useState(false);
-  const [value, setValue] = useState(folder.name);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (renaming) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [renaming]);
-
-  const commit = () => {
-    setRenaming(false);
-    const next = value.trim();
-    if (next && next !== folder.name) onUpdate(folder.id, { name: next });
-  };
-
-  return (
-    <div
-      className="mb-0.5"
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        onDragOver(true);
-      }}
-      onDragLeave={() => onDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        const pageId = e.dataTransfer.getData("text/lumen-page");
-        if (pageId) onDropPage(pageId);
-        onDragOver(false);
-      }}
-    >
-      <div
-        className={cn(
-          "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] text-ink-3 transition-colors hover:bg-paper-sunk",
-          dragOver && "bg-flame-tint ring-1 ring-flame/40",
-        )}
-      >
-        <button
-          onClick={() => onUpdate(folder.id, { is_open: !folder.is_open })}
-          aria-label={folder.is_open ? "Collapse folder" : "Expand folder"}
-          aria-expanded={folder.is_open}
-          className="shrink-0 rounded p-0.5 text-ink-4 hover:text-ink"
-        >
-          <ChevronDown
-            className={cn("size-3 transition-transform duration-200", !folder.is_open && "-rotate-90")}
-          />
-        </button>
-
-        {renaming ? (
-          <input
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-              if (e.key === "Escape") {
-                setValue(folder.name);
-                setRenaming(false);
-              }
-            }}
-            className="min-w-0 flex-1 rounded bg-card px-1 py-0.5 text-[13px] text-ink outline-none ring-1 ring-flame"
-          />
-        ) : (
-          <span
-            onDoubleClick={() => {
-              setValue(folder.name);
-              setRenaming(true);
-            }}
-            className="min-w-0 flex-1 cursor-pointer truncate font-medium"
-          >
-            {folder.name}
-          </span>
-        )}
-
-        <span className="hidden gap-0.5 group-hover:flex">
-          <button
-            onClick={() => onAddPage(folder.id, "doc")}
-            aria-label={`Add a page to ${folder.name}`}
-            className="rounded p-0.5 text-ink-4 hover:text-ink"
-          >
-            <Plus className="size-3" />
-          </button>
-          <button
-            onClick={() => {
-              setValue(folder.name);
-              setRenaming(true);
-            }}
-            aria-label={`Rename ${folder.name}`}
-            className="rounded p-0.5 text-ink-4 hover:text-ink"
-          >
-            <Pencil className="size-3" />
-          </button>
-          <button
-            onClick={() => onDelete(folder.id)}
-            aria-label={`Delete ${folder.name}`}
-            className="rounded p-0.5 text-ink-4 hover:text-danger"
-          >
-            <Trash2 className="size-3" />
-          </button>
-        </span>
-      </div>
-
-      <AnimatePresence initial={false}>
-        {folder.is_open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ ...swift, opacity: { duration: 0.12 } }}
-            className="overflow-hidden"
-          >
-            {pages.length === 0 ? (
-              <p className="ml-7 py-1.5 text-[12px] text-ink-4">Empty</p>
-            ) : (
-              pages.map((page) => (
-                <PageRow
-                  key={page.id}
-                  page={page}
-                  indent
-                  selected={selectedId === page.id}
-                  onSelect={onSelect}
-                  onUpdate={onUpdatePage}
-                  onDelete={onDeletePage}
-                />
-              ))
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
+  return <p className="px-3 py-6 text-center text-[13px] leading-relaxed text-ink-4">{children}</p>;
 }

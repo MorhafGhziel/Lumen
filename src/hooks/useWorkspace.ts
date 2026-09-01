@@ -8,7 +8,6 @@ import type {
   Comment,
   DocPage,
   DrawStroke,
-  Folder,
   StickyColor,
   StickyNote,
   SyncStatus,
@@ -17,7 +16,6 @@ import type {
 import type {
   CommentRow,
   DrawStrokeRow,
-  FolderRow,
   PageRow,
   StickyNoteRow,
 } from "@/lib/database.types";
@@ -51,6 +49,8 @@ const asText = (value: unknown, fallback: string): string =>
 const toPage = (r: PageRow): DocPage => ({
   id: r.id,
   kind: r.kind === "canvas" ? "canvas" : "doc",
+  parent_id: r.parent_id,
+  deleted_at: r.deleted_at ? new Date(r.deleted_at).getTime() : null,
   title: asText(r.title, ""),
   content: asText(r.content, ""),
   icon: asText(r.icon, "file"),
@@ -61,15 +61,6 @@ const toPage = (r: PageRow): DocPage => ({
   share_id: r.share_id,
   created_at: new Date(r.created_at).getTime(),
   updated_at: new Date(r.updated_at).getTime(),
-});
-
-const toFolder = (r: FolderRow): Folder => ({
-  id: r.id,
-  name: asText(r.name, "Untitled folder"),
-  parent_id: r.parent_id,
-  is_open: r.is_open ?? true,
-  sort_order: r.sort_order ?? 0,
-  created_at: new Date(r.created_at).getTime(),
 });
 
 const toNote = (r: StickyNoteRow): StickyNote => ({
@@ -153,13 +144,41 @@ const toComment = (r: CommentRow): Comment => ({
   created_at: new Date(r.created_at).getTime(),
 });
 
+/* ── Tree helpers ─────────────────────────────────────────────────────── */
+
+/** Every page beneath this one, at any depth. */
+function collectDescendants(pages: DocPage[], id: string): string[] {
+  const out: string[] = [];
+  const walk = (parent: string) => {
+    for (const page of pages) {
+      if (page.parent_id === parent) {
+        out.push(page.id);
+        walk(page.id);
+      }
+    }
+  };
+  walk(id);
+  return out;
+}
+
+/**
+ * True when moving a page under the target would create a cycle.
+ *
+ * Dropping a page into its own child detaches that whole branch from the root:
+ * it still exists, but nothing renders it, so it looks exactly like data loss.
+ */
+function wouldCycle(pages: DocPage[], id: string, target: string | null): boolean {
+  if (target === null) return false;
+  if (target === id) return true;
+  return collectDescendants(pages, id).includes(target);
+}
+
 /* ── Hook ─────────────────────────────────────────────────────────────── */
 
 export function useWorkspace(userId: string | undefined) {
   const supabase = useMemo(() => createClient(), []);
 
   const [pages, setPages] = useState<DocPage[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [notes, setNotes] = useState<StickyNote[]>([]);
   const [strokes, setStrokes] = useState<DrawStroke[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
@@ -176,6 +195,17 @@ export function useWorkspace(userId: string | undefined) {
 
   // Being offline outranks whatever the last write reported.
   const status: SyncStatus = online ? writeStatus : "offline";
+
+  // The tree and the trash are two views of one list, split here so no screen
+  // has to remember to filter and none can forget.
+  const livePages = useMemo(() => pages.filter((p) => p.deleted_at === null), [pages]);
+  const trashedPages = useMemo(
+    () =>
+      pages
+        .filter((p) => p.deleted_at !== null)
+        .sort((a, b) => (b.deleted_at ?? 0) - (a.deleted_at ?? 0)),
+    [pages],
+  );
 
   /**
    * Rows this tab wrote, so the realtime echo of our own change does not stomp
@@ -206,7 +236,7 @@ export function useWorkspace(userId: string | undefined) {
   /* ── Writers, one per table ─────────────────────────────────────────── */
 
   const writers = useMemo(() => {
-    const make = (table: "pages" | "folders" | "sticky_notes", waitMs: number) =>
+    const make = (table: "pages" | "sticky_notes", waitMs: number) =>
       new RecordWriter(
         async (id, patch) => {
           markSaving();
@@ -231,7 +261,6 @@ export function useWorkspace(userId: string | undefined) {
 
     return {
       pages: make("pages", SAVE_DEBOUNCE),
-      folders: make("folders", SAVE_DEBOUNCE),
       notes: make("sticky_notes", DRAG_DEBOUNCE),
     };
   }, [supabase, markSaving, markSaved, markError, noteSelfWrite]);
@@ -241,10 +270,8 @@ export function useWorkspace(userId: string | undefined) {
     return () => {
       // Best-effort final write, then tear the timers down.
       void current.pages.flushAll();
-      void current.folders.flushAll();
       void current.notes.flushAll();
       current.pages.dispose();
-      current.folders.dispose();
       current.notes.dispose();
     };
   }, [writers]);
@@ -265,9 +292,8 @@ export function useWorkspace(userId: string | undefined) {
       // was merely out of date into an app that would not load at all. These
       // are personal-sized collections, so sorting them here costs nothing and
       // means a half-migrated project still opens and still shows its data.
-      const [pagesRes, foldersRes, notesRes, strokesRes] = await Promise.all([
+      const [pagesRes, notesRes, strokesRes] = await Promise.all([
         supabase.from("pages").select("*"),
-        supabase.from("folders").select("*"),
         supabase.from("sticky_notes").select("*"),
         supabase.from("drawing_strokes").select("*"),
       ]);
@@ -278,7 +304,7 @@ export function useWorkspace(userId: string | undefined) {
       // explicit user_id filter would be belt-and-braces at best and a false
       // sense of security at worst.
       const firstError =
-        pagesRes.error ?? foldersRes.error ?? notesRes.error ?? strokesRes.error;
+        pagesRes.error ?? notesRes.error ?? strokesRes.error;
       if (firstError) {
         markError(describeDbError(firstError, "Could not load your workspace."));
         setDataLoaded(true);
@@ -288,11 +314,6 @@ export function useWorkspace(userId: string | undefined) {
       // The mappers already default every column the older schema lacks, so
       // these comparisons are safe even when the columns are absent.
       setPages((pagesRes.data ?? []).map(toPage).sort((a, b) => b.updated_at - a.updated_at));
-      setFolders(
-        (foldersRes.data ?? [])
-          .map(toFolder)
-          .sort((a, b) => a.sort_order - b.sort_order || a.created_at - b.created_at),
-      );
       setNotes((notesRes.data ?? []).map(toNote).sort((a, b) => a.z_index - b.z_index));
       setStrokes((strokesRes.data ?? []).map(toStroke));
       setDataLoaded(true);
@@ -346,17 +367,6 @@ export function useWorkspace(userId: string | undefined) {
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "folders", filter: `user_id=eq.${userId}` },
-        (payload) =>
-          apply(
-            setFolders,
-            payload.eventType,
-            payload.new && "id" in payload.new ? toFolder(payload.new as FolderRow) : null,
-            (payload.old as { id?: string })?.id,
-          ),
-      )
-      .on(
-        "postgres_changes",
         {
           event: "*",
           schema: "public",
@@ -381,7 +391,7 @@ export function useWorkspace(userId: string | undefined) {
   /* ── Pages ──────────────────────────────────────────────────────────── */
 
   const addPage = useCallback(
-    async (folderId: string | null = null, kind: PageKind = "doc"): Promise<string> => {
+    async (parentId: string | null = null, kind: PageKind = "doc"): Promise<string> => {
       if (!userId) throw new Error("Not signed in");
 
       const id = tempId();
@@ -396,7 +406,9 @@ export function useWorkspace(userId: string | undefined) {
           title: "",
           content: "",
           icon: kind === "canvas" ? "canvas" : "file",
-          folder_id: folderId,
+          parent_id: parentId,
+          folder_id: null,
+          deleted_at: null,
           is_favorite: false,
           cover_url: null,
           is_public: false,
@@ -413,7 +425,7 @@ export function useWorkspace(userId: string | undefined) {
       const insert = (async (): Promise<string | null> => {
         const { data, error: insertError } = await supabase
           .from("pages")
-          .insert({ user_id: userId, folder_id: folderId, kind, icon: kind === "canvas" ? "canvas" : "file" })
+          .insert({ user_id: userId, parent_id: parentId, kind, icon: kind === "canvas" ? "canvas" : "file" })
           .select()
           .single();
 
@@ -454,7 +466,10 @@ export function useWorkspace(userId: string | undefined) {
       if (updates.title !== undefined) patch.title = updates.title;
       if (updates.content !== undefined) patch.content = updates.content;
       if (updates.icon !== undefined) patch.icon = updates.icon;
-      if (updates.folder_id !== undefined) patch.folder_id = updates.folder_id;
+      if (updates.parent_id !== undefined) patch.parent_id = updates.parent_id;
+      if (updates.deleted_at !== undefined) {
+        patch.deleted_at = updates.deleted_at === null ? null : new Date(updates.deleted_at).toISOString();
+      }
       if (updates.is_favorite !== undefined) patch.is_favorite = updates.is_favorite;
       if (updates.cover_url !== undefined) patch.cover_url = updates.cover_url;
       if (updates.is_public !== undefined) patch.is_public = updates.is_public;
@@ -467,7 +482,82 @@ export function useWorkspace(userId: string | undefined) {
     [writers],
   );
 
-  const deletePage = useCallback(
+  /**
+   * Moves a page to the trash.
+   *
+   * Deleting used to be immediate and permanent, which is a hostile thing to
+   * do to somebody's writing. Nothing is destroyed here: the row is stamped
+   * with deleted_at and disappears from the tree until it is restored or
+   * emptied deliberately.
+   */
+  const trashPage = useCallback(
+    async (id: string) => {
+      const stamp = Date.now();
+      const descendants = collectDescendants(pages, id);
+      const ids = [id, ...descendants];
+
+      // A page's children go with it, or they would be stranded with a parent
+      // that is no longer in the tree.
+      setPages((prev) =>
+        prev.map((p) => (ids.includes(p.id) ? { ...p, deleted_at: stamp } : p)),
+      );
+
+      const realIds = ids.map((each) => writers.pages.resolve(each)).filter((each) => !isTempId(each));
+      if (realIds.length === 0) return;
+
+      for (const realId of realIds) noteSelfWrite(realId);
+      const { error: writeError } = await supabase
+        .from("pages")
+        .update({ deleted_at: new Date(stamp).toISOString() })
+        .in("id", realIds);
+
+      if (writeError) {
+        markError(describeDbError(writeError, "Could not move that page to the trash."));
+        setPages((prev) =>
+          prev.map((p) => (ids.includes(p.id) ? { ...p, deleted_at: null } : p)),
+        );
+      }
+    },
+    [pages, supabase, writers, markError, noteSelfWrite],
+  );
+
+  /**
+   * Reparents a page, refusing moves that would detach a branch.
+   *
+   * Returns false when the move is rejected, so the caller can say why rather
+   * than appearing to do nothing.
+   */
+  const movePage = useCallback(
+    (id: string, parentId: string | null): boolean => {
+      if (wouldCycle(pages, id, parentId)) return false;
+      updatePage(id, { parent_id: parentId });
+      return true;
+    },
+    [pages, updatePage],
+  );
+
+  /** Puts a trashed page back, along with everything under it. */
+  const restorePage = useCallback(
+    async (id: string) => {
+      const ids = [id, ...collectDescendants(pages, id)];
+      setPages((prev) => prev.map((p) => (ids.includes(p.id) ? { ...p, deleted_at: null } : p)));
+
+      const realIds = ids.map((each) => writers.pages.resolve(each)).filter((each) => !isTempId(each));
+      if (realIds.length === 0) return;
+
+      for (const realId of realIds) noteSelfWrite(realId);
+      const { error: writeError } = await supabase
+        .from("pages")
+        .update({ deleted_at: null })
+        .in("id", realIds);
+
+      if (writeError) markError(describeDbError(writeError, "Could not restore that page."));
+    },
+    [pages, supabase, writers, markError, noteSelfWrite],
+  );
+
+  /** The only path that actually destroys anything. */
+  const deletePageForever = useCallback(
     async (id: string) => {
       const snapshot = pages;
       writers.pages.cancel(id);
@@ -477,6 +567,7 @@ export function useWorkspace(userId: string | undefined) {
       if (isTempId(realId)) return; // Never reached the database.
 
       noteSelfWrite(realId);
+      // Children cascade in the database, so one delete is enough.
       const { error: deleteError } = await supabase.from("pages").delete().eq("id", realId);
       if (deleteError) {
         markError(describeDbError(deleteError, "Could not delete that page."));
@@ -484,80 +575,6 @@ export function useWorkspace(userId: string | undefined) {
       }
     },
     [pages, supabase, writers, markError, noteSelfWrite],
-  );
-
-  /* ── Folders ────────────────────────────────────────────────────────── */
-
-  const addFolder = useCallback(
-    async (rawName?: unknown): Promise<string> => {
-      if (!userId) throw new Error("Not signed in");
-
-      // Anything that is not a string is discarded rather than trusted. A bare
-      // `onClick={addFolder}` hands this a SyntheticEvent, and a default
-      // parameter would happily accept it and store an object as the name.
-      const name = typeof rawName === "string" && rawName.trim() ? rawName.trim() : "New folder";
-
-      const id = tempId();
-      setFolders((prev) => [
-        ...prev,
-        { id, name, parent_id: null, is_open: true, sort_order: prev.length, created_at: Date.now() },
-      ]);
-
-      const insert = (async (): Promise<string | null> => {
-        const { data, error: insertError } = await supabase
-          .from("folders")
-          .insert({ user_id: userId, name, sort_order: folders.length })
-          .select()
-          .single();
-
-        if (insertError || !data) {
-          markError(describeDbError(insertError, "Could not create the folder."));
-          setFolders((prev) => prev.filter((f) => f.id !== id));
-          return null;
-        }
-
-        noteSelfWrite(data.id);
-        setFolders((prev) => prev.map((f) => (f.id === id ? toFolder(data) : f)));
-        return data.id;
-      })();
-
-      writers.folders.trackInsert(id, insert);
-      return (await insert) ?? id;
-    },
-    [userId, supabase, folders.length, writers, markError, noteSelfWrite],
-  );
-
-  const updateFolder = useCallback(
-    (id: string, updates: Partial<Folder>) => {
-      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, ...updates } : f)));
-
-      const patch: Patch = {};
-      if (updates.name !== undefined) patch.name = updates.name;
-      if (updates.is_open !== undefined) patch.is_open = updates.is_open;
-      if (updates.sort_order !== undefined) patch.sort_order = updates.sort_order;
-      if (updates.parent_id !== undefined) patch.parent_id = updates.parent_id;
-
-      if (Object.keys(patch).length > 0) writers.folders.queue(id, patch);
-    },
-    [writers],
-  );
-
-  const deleteFolder = useCallback(
-    async (id: string) => {
-      writers.folders.cancel(id);
-      // Pages survive their folder; they fall back to the root.
-      setPages((prev) => prev.map((p) => (p.folder_id === id ? { ...p, folder_id: null } : p)));
-      setFolders((prev) => prev.filter((f) => f.id !== id));
-
-      const realId = writers.folders.resolve(id);
-      if (isTempId(realId)) return;
-
-      noteSelfWrite(realId);
-      // The foreign key is ON DELETE SET NULL, so the pages detach on their own.
-      const { error: deleteError } = await supabase.from("folders").delete().eq("id", realId);
-      if (deleteError) markError(describeDbError(deleteError, "Could not delete that folder."));
-    },
-    [supabase, writers, markError, noteSelfWrite],
   );
 
   /* ── Sticky notes ───────────────────────────────────────────────────── */
@@ -770,7 +787,7 @@ export function useWorkspace(userId: string | undefined) {
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
       const dirty =
-        writers.pages.isDirty || writers.folders.isDirty || writers.notes.isDirty;
+        writers.pages.isDirty || writers.notes.isDirty;
       if (!dirty) return;
       // Give the pending writes a chance; the prompt buys them a moment.
       void writers.pages.flushAll();
@@ -790,15 +807,17 @@ export function useWorkspace(userId: string | undefined) {
       setStatus("idle");
     }, []),
 
-    pages,
+    /** Everything not in the trash. This is the tree. */
+    pages: livePages,
+    /** In the trash, newest first. */
+    trashedPages,
     addPage,
     updatePage,
-    deletePage,
+    trashPage,
+    restorePage,
+    deletePageForever,
+    movePage,
 
-    folders,
-    addFolder,
-    updateFolder,
-    deleteFolder,
 
     notes,
     addNote,

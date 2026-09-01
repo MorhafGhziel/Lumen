@@ -6,7 +6,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   CornerDownLeft,
   FilePlus2,
-  FolderPlus,
   PenLine,
   Search,
   Sparkles,
@@ -39,7 +38,6 @@ interface PaletteProps {
   pages: DocPage[];
   onSelectPage: (id: string) => void;
   onNewPage: () => void;
-  onNewFolder: () => void;
   onNewCanvas: () => void;
   onToggleAi: () => void;
 }
@@ -64,7 +62,6 @@ function PaletteDialog({
   pages,
   onSelectPage,
   onNewPage,
-  onNewFolder,
   onNewCanvas,
   onToggleAi,
 }: PaletteProps) {
@@ -80,13 +77,6 @@ function PaletteDialog({
         hint: "⌘N",
         icon: <FilePlus2 className="size-4" />,
         run: onNewPage,
-        group: "Actions",
-      },
-      {
-        id: "new-folder",
-        label: "New folder",
-        icon: <FolderPlus className="size-4" />,
-        run: onNewFolder,
         group: "Actions",
       },
       {
@@ -116,7 +106,7 @@ function PaletteDialog({
     }));
 
     return [...actions, ...pageCommands];
-  }, [pages, onNewPage, onNewCanvas, onNewFolder, onToggleAi, onSelectPage]);
+  }, [pages, onNewPage, onNewCanvas, onToggleAi, onSelectPage]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
