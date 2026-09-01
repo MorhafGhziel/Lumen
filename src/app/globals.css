@@ -1,124 +1,413 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Lumen design system
+   --------------------------------------------------------------------------
+   Light is the primary theme: a warm paper canvas, white cards, hairline
+   borders and exactly one chromatic accent. Dark is a separate, deliberate
+   palette where elevation is expressed through colour stepping, not shadow.
+
+   Rules the whole app follows:
+     - Content cards get a hairline border, never a drop shadow.
+     - Only one chromatic accent (Flame). Tile colours are full-bleed only.
+     - Display type gets negative tracking; UI type does not.
+     - Every interactive surface has a visible focus ring.
+   ========================================================================== */
+
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface: var(--surface);
-  --color-surface-hover: var(--surface-hover);
-  --color-surface-alt: var(--surface-alt);
-  --color-border: var(--border-color);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-fg);
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-foreground: var(--accent-fg);
-  --color-canvas-dot: var(--dot-color);
+  /* Surfaces */
+  --color-paper: var(--paper);
+  --color-paper-sunk: var(--paper-sunk);
+  --color-card: var(--card);
+  --color-card-raised: var(--card-raised);
+
+  /* Ink hierarchy is built from four fixed steps, not from alpha guesswork */
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  /* Lines */
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  /* The one accent */
+  --color-flame: var(--flame);
+  --color-flame-deep: var(--flame-deep);
+  --color-flame-tint: var(--flame-tint);
+  --color-flame-ink: var(--flame-ink);
+
+  /* Full-bleed tile colours, never used on text below 18px */
+  --color-tile-marigold: var(--tile-marigold);
+  --color-tile-iris: var(--tile-iris);
+  --color-tile-sky: var(--tile-sky);
+  --color-tile-sprout: var(--tile-sprout);
+  --color-tile-orchid: var(--tile-orchid);
+  --color-tile-midnight: var(--tile-midnight);
+
+  /* Feedback */
   --color-danger: var(--danger);
+  --color-danger-tint: var(--danger-tint);
+  --color-success: var(--success);
+  --color-success-tint: var(--success-tint);
 
-  --font-sans: var(--font-geist-sans), "Inter", system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), "JetBrains Mono", monospace;
+  /* Canvas */
+  --color-dot: var(--dot);
 
-  --animate-fade-in: fade-in 0.3s ease-out;
-  --animate-slide-up: slide-up 0.3s ease-out;
-  --animate-scale-in: scale-in 0.2s ease-out;
+  /* Type */
+  --font-display: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-  @keyframes fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  @keyframes slide-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes scale-in {
-    from { opacity: 0; transform: scale(0.96); }
-    to { opacity: 1; transform: scale(1); }
-  }
+  /* Radius: 8/12 for chrome, 20/28 for cards and tiles */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-2xl: 36px;
+
+  /* Motion */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
 }
 
-/* ── Light ── */
+/* -- Light: warm paper --------------------------------------------------- */
 :root {
-  --background: #f8f9fb;
-  --foreground: #1a1a2e;
-  --surface: #ffffff;
-  --surface-hover: #f1f3f9;
-  --surface-alt: #f4f6fa;
-  --border-color: #e2e5ed;
-  --muted: #f0f2f7;
-  --muted-fg: #6b7280;
-  --accent: #6c5ce7;
-  --accent-hover: #5a4bd6;
-  --accent-fg: #ffffff;
-  --dot-color: #dddfe6;
-  --danger: #ef4444;
-  --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.5);
-  --card-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  --card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.1);
+  color-scheme: light;
 
-  --sticky-yellow: #fef9c3;
-  --sticky-pink: #fce7f3;
-  --sticky-blue: #dbeafe;
-  --sticky-green: #dcfce7;
-  --sticky-purple: #f3e8ff;
-  --sticky-orange: #ffedd5;
+  --paper: #fdfbf8;
+  --paper-sunk: #f6f2ec;
+  --card: #ffffff;
+  --card-raised: #ffffff;
+
+  --ink: #1a1714;
+  --ink-2: #453f38;
+  --ink-3: #6d655b;
+  --ink-4: #9d9489;
+
+  --line: rgb(26 23 20 / 0.09);
+  --line-strong: rgb(26 23 20 / 0.16);
+
+  --flame: #ff6a1a;
+  --flame-deep: #c94805;
+  --flame-tint: #fff1e7;
+  --flame-ink: #ffffff;
+
+  --tile-marigold: #ffb110;
+  --tile-iris: #6f66f2;
+  --tile-sky: #3f9ae8;
+  --tile-sprout: #1faa5b;
+  --tile-orchid: #d472cc;
+  --tile-midnight: #131a3a;
+
+  --danger: #d3341c;
+  --danger-tint: #fdeeeb;
+  --success: #157f4a;
+  --success-tint: #e9f7ef;
+
+  --dot: rgb(26 23 20 / 0.13);
+
+  /* Sticky notes: paper stocks, not neons */
+  --sticky-butter: #fdf0b8;
+  --sticky-blush: #fbdbe2;
+  --sticky-sky: #d3e6f7;
+  --sticky-sage: #d8ecd3;
+  --sticky-lilac: #e4dcf7;
+  --sticky-clay: #fadec4;
+  --sticky-ink: #2a2420;
+
+  /* Depth is used sparingly, only on things that genuinely float */
+  --lift-sm: 0 1px 2px rgb(26 23 20 / 0.06);
+  --lift-md: 0 4px 16px -4px rgb(26 23 20 / 0.10), 0 1px 3px rgb(26 23 20 / 0.05);
+  --lift-lg: 0 18px 48px -12px rgb(26 23 20 / 0.16), 0 2px 6px rgb(26 23 20 / 0.05);
+
+  --scrim: rgb(26 23 20 / 0.32);
+  --glass: rgb(253 251 248 / 0.78);
+
+  /* Illustration palette.
+     Deliberately separate from the UI tokens: a sheet of paper should look
+     like paper on a dark desk too, so these shift far less between themes
+     than the interface around them. Light falls from the top left. */
+  --illo-paper: #ffffff;
+  --illo-paper-mid: #f1ebe2;
+  --illo-paper-deep: #ded5c8;
+  --illo-edge: rgb(26 23 20 / 0.14);
+  --illo-line: rgb(26 23 20 / 0.16);
+  --illo-shadow: rgb(66 48 32 / 0.16);
+  --illo-metal: #b9b2a8;
+  --illo-metal-deep: #8d857a;
 }
 
-/* ── Dark ── */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0f0f17;
-    --foreground: #e8e8f0;
-    --surface: #1a1a28;
-    --surface-hover: #252536;
-    --surface-alt: #1e1e2e;
-    --border-color: #2a2a3d;
-    --muted: #222233;
-    --muted-fg: #8888a0;
-    --accent: #8b7cf7;
-    --accent-hover: #7c6bf0;
-    --accent-fg: #ffffff;
-    --dot-color: #222236;
-    --danger: #f87171;
-    --glass-bg: rgba(26, 26, 40, 0.72);
-    --glass-border: rgba(42, 42, 61, 0.5);
-    --card-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
-    --card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.35);
+/* -- Dark: obsidian gallery ---------------------------------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
 
-    --sticky-yellow: #423d1a;
-    --sticky-pink: #3d1a2e;
-    --sticky-blue: #1a2a3d;
-    --sticky-green: #1a3d24;
-    --sticky-purple: #2a1a3d;
-    --sticky-orange: #3d2a1a;
-  }
+  --paper: #0f1011;
+  --paper-sunk: #090a0b;
+  --card: #17181a;
+  --card-raised: #212325;
+
+  --ink: #f5f5f7;
+  --ink-2: #cacaca;
+  --ink-3: #9f9fa0;
+  --ink-4: #6a6b6b;
+
+  --line: rgb(255 255 255 / 0.10);
+  --line-strong: rgb(255 255 255 / 0.18);
+
+  --flame: #ff7a33;
+  --flame-deep: #e2570f;
+  --flame-tint: rgb(255 122 51 / 0.13);
+  --flame-ink: #17110c;
+
+  --tile-marigold: #ffb110;
+  --tile-iris: #847dff;
+  --tile-sky: #62aef0;
+  --tile-sprout: #34c97a;
+  --tile-orchid: #dd90d8;
+  --tile-midnight: #1b2450;
+
+  --danger: #ff7a66;
+  --danger-tint: rgb(255 122 102 / 0.13);
+  --success: #4ad48d;
+  --success-tint: rgb(74 212 141 / 0.13);
+
+  --dot: rgb(255 255 255 / 0.10);
+
+  --sticky-butter: #4a4118;
+  --sticky-blush: #4d2530;
+  --sticky-sky: #1e3550;
+  --sticky-sage: #1d4430;
+  --sticky-lilac: #332a52;
+  --sticky-clay: #4f3520;
+  --sticky-ink: #f2e9e2;
+
+  --lift-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --lift-md: 0 4px 16px -4px rgb(0 0 0 / 0.5);
+  --lift-lg: 0 18px 48px -12px rgb(0 0 0 / 0.6);
+
+  --scrim: rgb(0 0 0 / 0.6);
+  --glass: rgb(15 16 17 / 0.78);
+
+  /* Paper stays warm and light in the dark theme — inverting it would turn
+     every illustration into a hole in the page. It is only pulled off pure
+     white so it does not glare. */
+  --illo-paper: #ece6dd;
+  --illo-paper-mid: #d6cec3;
+  --illo-paper-deep: #b9b0a3;
+  --illo-edge: rgb(0 0 0 / 0.22);
+  --illo-line: rgb(26 23 20 / 0.22);
+  --illo-shadow: rgb(0 0 0 / 0.45);
+  --illo-metal: #8f887e;
+  --illo-metal-deep: #6b655c;
+}
+
+/* -- Base ---------------------------------------------------------------- */
+* {
+  border-color: var(--line);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-sans);
-  overflow: hidden;
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::selection {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: var(--flame);
+  color: var(--flame-ink);
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* Thin, theme-aware scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 9px; }
-::-webkit-scrollbar-thumb:hover { background: var(--muted-fg); }
-
-/* Global cursor-pointer for all buttons */
-button, [role="button"] {
-  cursor: pointer;
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-4);
+  background-clip: content-box;
 }
 
-.glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
+button, [role="button"], summary { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* One consistent focus treatment everywhere, for keyboard users only */
+:focus-visible {
+  outline: 2px solid var(--flame);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* -- Type ---------------------------------------------------------------- */
+/* Display type is the loudest thing in the system, so it gets the tight
+   tracking and the optical axes that make Fraunces feel drawn, not set. */
+.font-display {
+  font-family: var(--font-display);
+  font-variation-settings: "SOFT" 30, "WONK" 1;
+  letter-spacing: -0.022em;
+  font-weight: 600;
+}
+
+.display-xl { font-size: clamp(3rem, 8.5vw, 6.5rem); line-height: 0.94; }
+.display-lg { font-size: clamp(2.5rem, 6vw, 4.25rem); line-height: 1; }
+.display-md { font-size: clamp(2rem, 4vw, 3rem); line-height: 1.06; }
+.display-sm { font-size: clamp(1.5rem, 2.6vw, 2rem); line-height: 1.15; }
+
+/* Uppercase micro-labels: the system's only monospaced voice */
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+/* -- Surfaces ------------------------------------------------------------ */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--line);
+}
+
+/* Paper warmth: two overlaid gradients, no image request */
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    radial-gradient(circle at 18% 24%, rgb(255 106 26 / 0.055), transparent 46%),
+    radial-gradient(circle at 82% 8%, rgb(111 102 242 / 0.045), transparent 42%);
+}
+
+/* -- Tactile press ------------------------------------------------------- */
+/* The Duolingo affordance: a solid shelf under the control that collapses on
+   press, so the button physically moves under the cursor. Uses box-shadow
+   rather than a wrapper element so it composites on the GPU. */
+.press {
+  position: relative;
+  transform: translateY(0);
+  transition:
+    transform 90ms var(--ease-out-quint),
+    box-shadow 90ms var(--ease-out-quint),
+    background-color 160ms var(--ease-out-quint),
+    border-color 160ms var(--ease-out-quint),
+    color 160ms var(--ease-out-quint);
+}
+.press:active:not(:disabled) {
+  transform: translateY(var(--press-depth, 3px));
+}
+
+.shelf {
+  --press-depth: 3px;
+  box-shadow: 0 3px 0 0 var(--shelf-color, var(--flame-deep));
+}
+.shelf:active:not(:disabled) {
+  box-shadow: 0 0 0 0 var(--shelf-color, var(--flame-deep));
+}
+
+/* -- Marker underline ---------------------------------------------------- */
+/* Hand-drawn emphasis for single words inside headlines. The SVG is inline so
+   it inherits currentColor and costs no request. */
+.marker {
+  position: relative;
+  white-space: nowrap;
+}
+/* The stroke's own box is set at the usage site, because an animation wrapper
+   normally sits between this element and the SVG — a direct-child rule here
+   silently matched nothing and left the stroke at its intrinsic size. */
+
+/* -- Motion primitives --------------------------------------------------- */
+@keyframes lumen-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes lumen-pop {
+  0% { opacity: 0; transform: scale(0.9); }
+  60% { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes lumen-drift {
+  0%, 100% { transform: translateY(0) rotate(var(--drift-rot, 0deg)); }
+  50% { transform: translateY(-9px) rotate(calc(var(--drift-rot, 0deg) + 1.5deg)); }
+}
+@keyframes lumen-shimmer {
+  from { background-position: -180% 0; }
+  to { background-position: 180% 0; }
+}
+@keyframes lumen-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-rise { animation: lumen-rise 0.55s var(--ease-out-quint) both; }
+.animate-pop { animation: lumen-pop 0.4s var(--ease-out-quint) both; }
+.animate-drift { animation: lumen-drift 6s ease-in-out infinite; }
+
+/* Skeletons read as "loading", never as empty content */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--paper-sunk) 25%,
+    color-mix(in oklab, var(--paper-sunk), var(--ink) 7%) 37%,
+    var(--paper-sunk) 63%
+  );
+  background-size: 240% 100%;
+  animation: lumen-shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* -- Editor -------------------------------------------------------------- */
+[contenteditable][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-4);
+  pointer-events: none;
+  display: block;
+}
+
+/* -- Reduced motion ------------------------------------------------------ */
+/* Honour the OS setting properly: remove looping and travel-based motion but
+   keep opacity changes, so state transitions stay legible. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .press:active:not(:disabled) { transform: none; }
+  .animate-drift { animation: none; }
+}
+
+/* -- Print --------------------------------------------------------------- */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; color: #000; }
 }
