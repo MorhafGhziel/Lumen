@@ -100,6 +100,36 @@ const getOnline = () => navigator.onLine;
 /** The server cannot know, and assuming online avoids a false offline flash. */
 const getOnlineOnServer = () => true;
 
+/**
+ * Turns a Postgres or PostgREST failure into something worth reading.
+ *
+ * The common case by far is a database that predates a column the app now
+ * writes to. "column folders.sort_order does not exist" is accurate but tells
+ * you nothing about what to do, so say that instead.
+ */
+function describeDbError(error: unknown, fallback: string): string {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : error instanceof Error
+        ? error.message
+        : "";
+
+  if (/column .* does not exist|schema cache|PGRST204/i.test(message)) {
+    return "Your database is missing columns this version needs. Open the Supabase SQL editor, run supabase/schema.sql, then reload. Your existing pages are not affected.";
+  }
+  if (/JWT|not authenticated|401/i.test(message)) {
+    return "Your session expired. Reload the page to sign in again.";
+  }
+  if (/row-level security|permission denied|42501/i.test(message)) {
+    return "The database refused that change. Run supabase/schema.sql to install the current security policies.";
+  }
+  if (/Failed to fetch|NetworkError/i.test(message)) {
+    return "Could not reach the database. Check your connection.";
+  }
+  return message || fallback;
+}
+
 const toComment = (r: CommentRow): Comment => ({
   id: r.id,
   page_id: r.page_id,
@@ -180,11 +210,7 @@ export function useWorkspace(userId: string | undefined) {
         {
           waitMs,
           onError: (writeError) => {
-            markError(
-              writeError instanceof Error
-                ? writeError.message
-                : "Could not save your last change.",
-            );
+            markError(describeDbError(writeError, "Could not save your last change."));
           },
         },
       );
@@ -218,11 +244,18 @@ export function useWorkspace(userId: string | undefined) {
     let cancelled = false;
 
     (async () => {
+      // Deliberately unordered. Ordering happens below, in JavaScript.
+      //
+      // Asking Postgres to sort by a column makes the whole request fail with
+      // a 400 if that column does not exist yet, which turned a database that
+      // was merely out of date into an app that would not load at all. These
+      // are personal-sized collections, so sorting them here costs nothing and
+      // means a half-migrated project still opens and still shows its data.
       const [pagesRes, foldersRes, notesRes, strokesRes] = await Promise.all([
-        supabase.from("pages").select("*").order("updated_at", { ascending: false }),
-        supabase.from("folders").select("*").order("sort_order").order("created_at"),
-        supabase.from("sticky_notes").select("*").order("z_index"),
-        supabase.from("drawing_strokes").select("*").order("created_at"),
+        supabase.from("pages").select("*"),
+        supabase.from("folders").select("*"),
+        supabase.from("sticky_notes").select("*"),
+        supabase.from("drawing_strokes").select("*"),
       ]);
 
       if (cancelled) return;
@@ -233,16 +266,20 @@ export function useWorkspace(userId: string | undefined) {
       const firstError =
         pagesRes.error ?? foldersRes.error ?? notesRes.error ?? strokesRes.error;
       if (firstError) {
-        markError(
-          `Could not load your workspace: ${firstError.message}. Check that supabase/schema.sql has been applied.`,
-        );
+        markError(describeDbError(firstError, "Could not load your workspace."));
         setDataLoaded(true);
         return;
       }
 
-      setPages((pagesRes.data ?? []).map(toPage));
-      setFolders((foldersRes.data ?? []).map(toFolder));
-      setNotes((notesRes.data ?? []).map(toNote));
+      // The mappers already default every column the older schema lacks, so
+      // these comparisons are safe even when the columns are absent.
+      setPages((pagesRes.data ?? []).map(toPage).sort((a, b) => b.updated_at - a.updated_at));
+      setFolders(
+        (foldersRes.data ?? [])
+          .map(toFolder)
+          .sort((a, b) => a.sort_order - b.sort_order || a.created_at - b.created_at),
+      );
+      setNotes((notesRes.data ?? []).map(toNote).sort((a, b) => a.z_index - b.z_index));
       setStrokes((strokesRes.data ?? []).map(toStroke));
       setDataLoaded(true);
     })();
@@ -366,7 +403,7 @@ export function useWorkspace(userId: string | undefined) {
           .single();
 
         if (insertError || !data) {
-          markError(insertError?.message ?? "Could not create the page.");
+          markError(describeDbError(insertError, "Could not create the page."));
           setPages((prev) => prev.filter((p) => p.id !== id));
           return null;
         }
@@ -427,7 +464,7 @@ export function useWorkspace(userId: string | undefined) {
       noteSelfWrite(realId);
       const { error: deleteError } = await supabase.from("pages").delete().eq("id", realId);
       if (deleteError) {
-        markError(`Could not delete that page: ${deleteError.message}`);
+        markError(describeDbError(deleteError, "Could not delete that page."));
         setPages(snapshot); // Put it back rather than pretend.
       }
     },
@@ -454,7 +491,7 @@ export function useWorkspace(userId: string | undefined) {
           .single();
 
         if (insertError || !data) {
-          markError(insertError?.message ?? "Could not create the folder.");
+          markError(describeDbError(insertError, "Could not create the folder."));
           setFolders((prev) => prev.filter((f) => f.id !== id));
           return null;
         }
@@ -498,7 +535,7 @@ export function useWorkspace(userId: string | undefined) {
       noteSelfWrite(realId);
       // The foreign key is ON DELETE SET NULL, so the pages detach on their own.
       const { error: deleteError } = await supabase.from("folders").delete().eq("id", realId);
-      if (deleteError) markError(`Could not delete that folder: ${deleteError.message}`);
+      if (deleteError) markError(describeDbError(deleteError, "Could not delete that folder."));
     },
     [supabase, writers, markError, noteSelfWrite],
   );
@@ -522,7 +559,7 @@ export function useWorkspace(userId: string | undefined) {
           .single();
 
         if (insertError || !data) {
-          markError(insertError?.message ?? "Could not create the note.");
+          markError(describeDbError(insertError, "Could not create the note."));
           setNotes((prev) => prev.filter((n) => n.id !== id));
           return null;
         }
@@ -562,7 +599,7 @@ export function useWorkspace(userId: string | undefined) {
 
       noteSelfWrite(realId);
       const { error: deleteError } = await supabase.from("sticky_notes").delete().eq("id", realId);
-      if (deleteError) markError(`Could not delete that note: ${deleteError.message}`);
+      if (deleteError) markError(describeDbError(deleteError, "Could not delete that note."));
     },
     [supabase, writers, markError, noteSelfWrite],
   );
@@ -595,7 +632,7 @@ export function useWorkspace(userId: string | undefined) {
         .single();
 
       if (insertError || !data) {
-        markError(insertError?.message ?? "Could not save that stroke.");
+        markError(describeDbError(insertError, "Could not save that stroke."));
         setStrokes((prev) => prev.filter((s) => s.id !== stroke.id));
         return;
       }
@@ -615,7 +652,7 @@ export function useWorkspace(userId: string | undefined) {
         .from("drawing_strokes")
         .delete()
         .in("id", persisted);
-      if (deleteError) markError(`Could not erase: ${deleteError.message}`);
+      if (deleteError) markError(describeDbError(deleteError, "Could not erase."));
     },
     [supabase, markError],
   );
@@ -629,7 +666,7 @@ export function useWorkspace(userId: string | undefined) {
       .delete()
       .eq("user_id", userId);
     if (deleteError) {
-      markError(`Could not clear the drawing: ${deleteError.message}`);
+      markError(describeDbError(deleteError, "Could not clear the drawing."));
       setStrokes(snapshot);
     }
   }, [userId, supabase, strokes, markError]);
@@ -679,7 +716,7 @@ export function useWorkspace(userId: string | undefined) {
         .single();
 
       if (insertError || !data) {
-        markError(insertError?.message ?? "Could not post that comment.");
+        markError(describeDbError(insertError, "Could not post that comment."));
         setComments((prev) => prev.filter((c) => c.id !== id));
         return;
       }
@@ -695,7 +732,7 @@ export function useWorkspace(userId: string | undefined) {
       if (isTempId(id)) return;
       const { error: deleteError } = await supabase.from("comments").delete().eq("id", id);
       if (deleteError) {
-        markError(`Could not delete that comment: ${deleteError.message}`);
+        markError(describeDbError(deleteError, "Could not delete that comment."));
         setComments(snapshot);
       }
     },
