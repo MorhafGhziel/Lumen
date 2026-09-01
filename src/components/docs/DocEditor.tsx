@@ -533,7 +533,11 @@ export function DocEditor({
 
       <div className="flex min-h-0 flex-1">
         {/* Document */}
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        {/* Clipped horizontally on purpose. Each block row reaches 72px left of
+            the column to hold its gutter controls, and a bare overflow-y makes
+            the browser compute overflow-x as auto, so on a narrow window that
+            reach turns into a horizontal scrollbar under the document. */}
+        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-clip">
           {page.cover_url && (
             <div className="group relative h-[180px] w-full overflow-hidden sm:h-[220px]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
