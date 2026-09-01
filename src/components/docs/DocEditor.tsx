@@ -1,531 +1,682 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
-  Sparkles, Loader2, BookOpen, CheckCircle, Image as ImageIcon,
-  MessageCircle, Share2, Globe, Lock, Copy, Check,
-  Trash2, X, Upload,
-  FileText, Pencil, ClipboardList, Pin, Paperclip, Notebook,
-  BookMarked, Lightbulb, Target, Bookmark, Star, Rocket,
-  Heart, Zap, Music, Camera, Code,
-  type LucideIcon,
+  Check,
+  Copy,
+  Globe,
+  ImagePlus,
+  Loader2,
+  Lock,
+  MessageSquare,
+  Send,
+  Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
-import type { DocPage, Comment, Block } from "@/lib/types";
+import { BlockEditor } from "@/components/docs/BlockEditor";
+import { PageIcon, PAGE_ICONS } from "@/components/app/PageIcon";
+import { MiniDoc } from "@/components/graphics/UiFragments";
+import { CurvedArrow } from "@/components/graphics/Doodles";
+import { Button } from "@/components/ui/Button";
+import {
+  blocksToPlainText,
+  parseBlocks,
+  plainTextToBlocks,
+  serializeBlocks,
+  wordCount,
+} from "@/lib/blocks";
+import type { AiAction, Block, Comment, DocPage } from "@/lib/types";
+import type { useImageUpload } from "@/hooks/useImageUpload";
 import { cn } from "@/lib/utils";
-import { BlockEditor, parseContentToBlocks, blocksToContent } from "./BlockEditor";
+import { menu, smooth, swift } from "@/lib/motion";
 
-const pageIcons: { icon: string; Icon: LucideIcon }[] = [
-  { icon: "file", Icon: FileText }, { icon: "pencil", Icon: Pencil },
-  { icon: "clipboard", Icon: ClipboardList }, { icon: "pin", Icon: Pin },
-  { icon: "paperclip", Icon: Paperclip }, { icon: "notebook", Icon: Notebook },
-  { icon: "book", Icon: BookMarked }, { icon: "lightbulb", Icon: Lightbulb },
-  { icon: "target", Icon: Target }, { icon: "bookmark", Icon: Bookmark },
-  { icon: "star", Icon: Star }, { icon: "rocket", Icon: Rocket },
-  { icon: "message", Icon: MessageCircle }, { icon: "heart", Icon: Heart },
-  { icon: "zap", Icon: Zap }, { icon: "music", Icon: Music },
-  { icon: "camera", Icon: Camera }, { icon: "code", Icon: Code },
+const AI_ACTIONS: { id: AiAction; label: string }[] = [
+  { id: "summarize", label: "Summarise" },
+  { id: "improve", label: "Improve" },
+  { id: "expand", label: "Expand" },
+  { id: "fix", label: "Fix grammar" },
+  { id: "outline", label: "Outline" },
+  { id: "brainstorm", label: "Brainstorm" },
 ];
-
-function getIcon(name: string): LucideIcon {
-  return pageIcons.find((p) => p.icon === name)?.Icon || FileText;
-}
-
-const coverImages = [
-  "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1477346611705-65d1883cee1e?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1200&h=400&fit=crop",
-  "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1200&h=400&fit=crop",
-];
-
-// Smooth dropdown animation config
-const dropdownAnim = {
-  initial: { opacity: 0, scale: 0.95, y: -4 },
-  animate: { opacity: 1, scale: 1, y: 0 },
-  exit: { opacity: 0, scale: 0.95, y: -4 },
-  transition: { duration: 0.15, ease: [0.25, 0.1, 0.25, 1] as [number, number, number, number] },
-};
-
-const fadeSlide = {
-  initial: { opacity: 0, y: 6 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: 6 },
-  transition: { duration: 0.2, ease: "easeOut" as const },
-};
 
 interface DocEditorProps {
   page: DocPage | null;
+  loaded: boolean;
   onUpdate: (id: string, updates: Partial<DocPage>) => void;
+  onCreate: () => void;
   comments: Comment[];
+  onLoadComments: (pageId: string) => void;
   onAddComment: (pageId: string, content: string) => void;
   onDeleteComment: (id: string) => void;
-  onLoadComments: (pageId: string) => void;
-  onImageUpload: (file: File) => Promise<string | null>;
-  userId?: string;
-  userEmail?: string;
+  upload: ReturnType<typeof useImageUpload>;
+  userId: string;
 }
 
 export function DocEditor({
-  page, onUpdate, comments, onAddComment, onDeleteComment,
-  onLoadComments, onImageUpload, userId, userEmail,
+  page,
+  loaded,
+  onUpdate,
+  onCreate,
+  comments,
+  onLoadComments,
+  onAddComment,
+  onDeleteComment,
+  upload,
+  userId,
 }: DocEditorProps) {
-  const [aiAction, setAiAction] = useState<string | null>(null);
-  const [showIconPicker, setShowIconPicker] = useState(false);
-  const [showCoverPicker, setShowCoverPicker] = useState(false);
-  const [showShareMenu, setShowShareMenu] = useState(false);
-  const [titleHovered, setTitleHovered] = useState(false);
-  const [commentText, setCommentText] = useState("");
-  const [commentOpen, setCommentOpen] = useState(false);
+  const [blocks, setBlocks] = useState<Block[]>(() => parseBlocks(page?.content ?? ""));
+  const [aiBusy, setAiBusy] = useState<AiAction | null>(null);
+  const [aiProblem, setAiProblem] = useState<string | null>(null);
+  const [pendingResult, setPendingResult] = useState<string | null>(null);
+  const [iconOpen, setIconOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const coverInputRef = useRef<HTMLInputElement>(null);
 
-  // Block editor state
-  const [currentBlocks, setCurrentBlocks] = useState<Block[]>([]);
-  const blocksInitRef = useRef<string | null>(null);
+  const loadedPageId = useRef<string | null>(null);
 
-  // Init blocks from page content
+  // Reload blocks only when the page identity changes. Watching `content` too
+  // would clobber the editor on every keystroke as state flows back down.
   useEffect(() => {
-    if (page && page.id !== blocksInitRef.current) {
-      blocksInitRef.current = page.id;
-      setCurrentBlocks(parseContentToBlocks(page.content));
+    if (page && page.id !== loadedPageId.current) {
+      loadedPageId.current = page.id;
+      setBlocks(parseBlocks(page.content));
+      setPendingResult(null);
+      setAiProblem(null);
     }
-  }, [page?.id, page?.content]);
-
-  const handleBlocksChange = useCallback((newBlocks: Block[]) => {
-    setCurrentBlocks(newBlocks);
-    if (page) {
-      onUpdate(page.id, { content: blocksToContent(newBlocks), updatedAt: Date.now() });
-    }
-  }, [page, onUpdate]);
-
-  // Listen for "open comment" event from block menu
-  useEffect(() => {
-    const handler = () => {
-      setCommentOpen(true);
-      setTimeout(() => document.getElementById("comment-input")?.focus(), 100);
-    };
-    window.addEventListener("lumen:open-comment", handler);
-    return () => window.removeEventListener("lumen:open-comment", handler);
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     if (page) onLoadComments(page.id);
-  }, [page?.id, onLoadComments]);
+  }, [page, onLoadComments]);
 
-  // Close menus on click outside
   useEffect(() => {
-    if (!showIconPicker && !showShareMenu && !showCoverPicker) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest("[data-menu]")) {
-        setShowIconPicker(false);
-        setShowShareMenu(false);
-        setShowCoverPicker(false);
+    if (!iconOpen && !shareOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-popover]")) {
+        setIconOpen(false);
+        setShareOpen(false);
       }
     };
-    setTimeout(() => window.addEventListener("click", handler), 0);
-    return () => window.removeEventListener("click", handler);
-  }, [showIconPicker, showShareMenu, showCoverPicker]);
+    const id = setTimeout(() => window.addEventListener("click", close), 0);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener("click", close);
+    };
+  }, [iconOpen, shareOpen]);
 
-  const handleAiAction = useCallback(
-    async (action: string) => {
-      if (!page || !page.content.trim() || aiAction) return;
-      setAiAction(action);
-      try {
-        const res = await fetch("/api/ai", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, content: page.content }),
-        });
-        const data = await res.json();
-        if (data.result) onUpdate(page.id, { content: data.result, updatedAt: Date.now() });
-      } catch { /* */ } finally { setAiAction(null); }
+  const handleBlocks = useCallback(
+    (next: Block[]) => {
+      setBlocks(next);
+      if (page) onUpdate(page.id, { content: serializeBlocks(next) });
     },
-    [page, onUpdate, aiAction]
+    [page, onUpdate],
   );
 
-  const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !page) return;
-    setUploading(true);
-    const url = await onImageUpload(file);
-    setUploading(false);
-    if (url) {
-      onUpdate(page.id, { cover_url: url });
-      setShowCoverPicker(false);
-    }
-  };
+  /**
+   * AI on the whole document.
+   *
+   * The previous build sent the raw block JSON to the model and wrote the
+   * prose reply straight back into `content`, which silently destroyed the
+   * document's structure. Now the text goes out as readable markdown and the
+   * reply is shown for review before it is parsed back into blocks.
+   */
+  const runAi = useCallback(
+    async (action: AiAction) => {
+      if (!page || aiBusy) return;
+      const text = blocksToPlainText(blocks);
+      if (!text.trim()) {
+        setAiProblem("Write something first, then Lumen has something to work with.");
+        return;
+      }
 
-  const togglePublic = () => {
+      setAiBusy(action);
+      setAiProblem(null);
+      setPendingResult("");
+
+      try {
+        const response = await fetch("/api/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, content: text }),
+        });
+
+        if (!response.ok) {
+          const problem = await response
+            .json()
+            .then((data: { error?: string }) => data.error)
+            .catch(() => null);
+          throw new Error(problem ?? "The assistant is unavailable right now.");
+        }
+        if (!response.body) throw new Error("The assistant sent an empty response.");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+          setPendingResult(accumulated);
+        }
+      } catch (error) {
+        setPendingResult(null);
+        setAiProblem(error instanceof Error ? error.message : "Something went wrong.");
+      } finally {
+        setAiBusy(null);
+      }
+    },
+    [page, blocks, aiBusy],
+  );
+
+  const acceptResult = useCallback(
+    (mode: "replace" | "append") => {
+      if (!pendingResult) return;
+      const parsed = plainTextToBlocks(pendingResult);
+      handleBlocks(mode === "replace" ? parsed : [...blocks, ...parsed]);
+      setPendingResult(null);
+    },
+    [pendingResult, blocks, handleBlocks],
+  );
+
+  const togglePublic = useCallback(() => {
     if (!page) return;
-    const newPublic = !page.is_public;
-    const shareId = newPublic && !page.share_id ? Math.random().toString(36).slice(2, 10) : page.share_id;
-    onUpdate(page.id, { is_public: newPublic, share_id: shareId });
-  };
+    onUpdate(page.id, { is_public: !page.is_public });
+  }, [page, onUpdate]);
 
-  const copyShareLink = () => {
-    if (!page?.share_id) return;
-    navigator.clipboard.writeText(`${window.location.origin}/shared/${page.share_id}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  // A page still being inserted has no share token yet, and a link built from
+  // an empty one would 404.
+  const shareUrl = useMemo(
+    () =>
+      page?.share_id && typeof window !== "undefined"
+        ? `${window.location.origin}/p/${page.share_id}`
+        : "",
+    [page],
+  );
 
-  const pageComments = comments.filter((c) => c.page_id === page?.id);
+  const copyShare = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard blocked; the input below is selectable as a fallback.
+    }
+  }, [shareUrl]);
 
-  if (!page) {
+  const pageComments = useMemo(
+    () => comments.filter((c) => c.page_id === page?.id),
+    [comments, page],
+  );
+
+  const words = useMemo(() => wordCount(blocks), [blocks]);
+
+  /* ── Empty and loading states ───────────────────────────────────────── */
+
+  if (!loaded) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
-        <BookOpen className="h-12 w-12 opacity-30" />
-        <p className="text-sm">Select a page or create a new one</p>
+      <div className="mx-auto w-full max-w-[760px] px-8 py-16">
+        <div className="skeleton h-10 w-2/3" />
+        <div className="mt-8 flex flex-col gap-3">
+          <div className="skeleton h-4 w-full" />
+          <div className="skeleton h-4 w-11/12" />
+          <div className="skeleton h-4 w-4/6" />
+        </div>
       </div>
     );
   }
 
-  const PageIcon = getIcon(page.icon);
+  if (!page) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+        {/* A real page, drawn small, rather than a picture of one. */}
+        <MiniDoc className="mb-2 rotate-[-2deg] opacity-70" />
+        <h2 className="mt-7 font-display text-2xl tracking-tight text-ink">
+          Nothing open yet
+        </h2>
+        <p className="mt-2 max-w-[38ch] text-sm leading-relaxed text-ink-3">
+          Make a page and start writing. It saves as you go, so there is no
+          reason to be precious about the first line.
+        </p>
+        <div className="relative mt-7">
+          <Button variant="primary" size="lg" onClick={onCreate}>
+            Create your first page
+          </Button>
+          <CurvedArrow className="absolute -right-16 top-1 hidden h-10 w-12 -scale-x-100 text-flame/50 sm:block" />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <motion.div
-      key={page.id}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.2 }}
-      className="flex flex-1 flex-col overflow-hidden"
-    >
-      {/* AI + Share toolbar */}
-      <div className="flex items-center gap-1 border-b border-border px-6 py-2">
-        <Sparkles className="h-3.5 w-3.5 text-accent" />
-        <span className="mr-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">AI</span>
-        {[
-          { key: "improve", label: "Improve" }, { key: "summarize", label: "Summarize" },
-          { key: "expand", label: "Expand" }, { key: "fix", label: "Fix Grammar" },
-          { key: "brainstorm", label: "Brainstorm" },
-        ].map(({ key, label }) => (
-          <button key={key} onClick={() => handleAiAction(key)} disabled={!!aiAction}
-            className={cn("rounded-md px-2.5 py-1 text-[11px] font-medium transition-all duration-150",
-              aiAction === key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-surface-hover hover:text-foreground")}>
-            {aiAction === key ? <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Working...</span> : label}
-          </button>
-        ))}
+    <div className="flex min-w-0 flex-1 flex-col">
+      {/* Toolbar */}
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-4 py-1.5">
+        <div className="flex items-center gap-0.5 overflow-x-auto">
+          {AI_ACTIONS.map((action) => (
+            <button
+              key={action.id}
+              onClick={() => void runAi(action.id)}
+              disabled={aiBusy !== null}
+              className={cn(
+                "press flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors [--press-depth:1px]",
+                aiBusy === action.id
+                  ? "bg-flame-tint text-flame"
+                  : "text-ink-3 hover:bg-paper-sunk hover:text-ink disabled:opacity-40",
+              )}
+            >
+              {aiBusy === action.id ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Sparkles className="size-3" />
+              )}
+              {action.label}
+            </button>
+          ))}
+        </div>
 
-        <div className="ml-auto flex items-center gap-1">
-          {/* Share button */}
-          <div className="relative" data-menu>
-            <button onClick={() => setShowShareMenu(!showShareMenu)}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground">
-              <Share2 className="h-3 w-3" /> Share
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <button
+            onClick={() => setCommentsOpen((v) => !v)}
+            className={cn(
+              "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
+              commentsOpen
+                ? "bg-paper-sunk text-ink"
+                : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+            )}
+          >
+            <MessageSquare className="size-3.5" />
+            {pageComments.length > 0 && pageComments.length}
+          </button>
+
+          <div className="relative" data-popover>
+            <button
+              onClick={() => setShareOpen((v) => !v)}
+              className={cn(
+                "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors [--press-depth:1px]",
+                page.is_public
+                  ? "bg-success-tint text-success"
+                  : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+              )}
+            >
+              {page.is_public ? <Globe className="size-3.5" /> : <Lock className="size-3.5" />}
+              {page.is_public ? "Public" : "Share"}
             </button>
 
             <AnimatePresence>
-              {showShareMenu && (
-                <motion.div {...dropdownAnim}
-                  className="absolute right-0 top-full z-50 mt-1 w-72 rounded-xl border border-border bg-surface p-4 shadow-xl">
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-xs font-semibold">Share this page</span>
-                    <button onClick={() => setShowShareMenu(false)} className="text-muted-foreground hover:text-foreground">
-                      <X className="h-3.5 w-3.5" />
+              {shareOpen && (
+                <motion.div
+                  variants={menu}
+                  initial="hidden"
+                  animate="show"
+                  exit="exit"
+                  className="absolute right-0 top-full z-50 mt-1.5 w-[300px] rounded-xl border border-line bg-card p-3"
+                  style={{ boxShadow: "var(--lift-lg)" }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[13px] font-semibold text-ink">Share this page</p>
+                      <p className="mt-0.5 text-[12px] leading-snug text-ink-4">
+                        Anyone with the link can read it and leave comments.
+                      </p>
+                    </div>
+                    <button
+                      onClick={togglePublic}
+                      disabled={!page.share_id}
+                      role="switch"
+                      aria-checked={page.is_public}
+                      aria-label="Make page public"
+                      className={cn(
+                        "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50",
+                        page.is_public ? "bg-flame" : "bg-line-strong",
+                      )}
+                    >
+                      <motion.span
+                        layout
+                        transition={swift}
+                        className={cn(
+                          "absolute top-0.5 size-4 rounded-full bg-white",
+                          page.is_public ? "left-[18px]" : "left-0.5",
+                        )}
+                      />
                     </button>
                   </div>
 
-                  <motion.button onClick={togglePublic} whileTap={{ scale: 0.98 }}
-                    className="mb-3 flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-surface-hover">
-                    <motion.div
-                      key={page.is_public ? "public" : "private"}
-                      initial={{ rotate: -20, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      {page.is_public ? (
-                        <Globe className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <Lock className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </motion.div>
-                    <div className="flex-1">
-                      <div className="text-xs font-medium">{page.is_public ? "Public" : "Private"}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {page.is_public ? "Anyone with the link can view" : "Only you can access"}
-                      </div>
-                    </div>
-                  </motion.button>
-
                   <AnimatePresence>
-                    {page.is_public && page.share_id && (
-                      <motion.button onClick={copyShareLink}
+                    {page.is_public && (
+                      <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="flex w-full items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-medium text-accent-foreground transition-colors hover:bg-accent-hover overflow-hidden">
-                        <motion.div key={copied ? "check" : "copy"} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 300 }}>
-                          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                        </motion.div>
-                        {copied ? "Copied!" : "Copy share link"}
-                      </motion.button>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Visibility badge */}
-          <motion.span
-            key={page.is_public ? "pub" : "priv"}
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.2 }}
-            className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium",
-              page.is_public ? "bg-green-500/10 text-green-600" : "bg-muted text-muted-foreground")}
-          >
-            {page.is_public ? <Globe className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
-            {page.is_public ? "Public" : "Private"}
-          </motion.span>
-        </div>
-      </div>
-
-      {/* Scrollable content */}
-      <div className="flex flex-1 flex-col overflow-y-auto">
-        {/* Cover image */}
-        <AnimatePresence>
-          {page.cover_url && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 208, opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="group relative w-full shrink-0 overflow-hidden"
-            >
-              <img src={page.cover_url} alt="Cover" className="h-52 w-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-surface" />
-              <motion.div
-                initial={{ opacity: 0, y: -4 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                className="absolute right-3 top-3 flex gap-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-              >
-                <button onClick={() => setShowCoverPicker(true)}
-                  className="rounded-lg bg-black/50 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm transition-colors hover:bg-black/70">
-                  Change
-                </button>
-                <button onClick={() => onUpdate(page.id, { cover_url: null })}
-                  className="rounded-lg bg-black/50 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm transition-colors hover:bg-black/70">
-                  Remove
-                </button>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="mx-auto w-full max-w-3xl px-8 py-8">
-          {/* Title area with hover actions — padded top so buttons stay in hover zone */}
-          <div
-            className="relative mb-2 pt-8 -mt-8"
-            onMouseEnter={() => setTitleHovered(true)}
-            onMouseLeave={() => setTitleHovered(false)}
-          >
-            {/* Hover actions: Add cover, Add icon */}
-            <AnimatePresence>
-              {titleHovered && !page.cover_url && (
-                <motion.div
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 4 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute top-0 left-0 flex items-center gap-2"
-                >
-                  {!page.cover_url && (
-                    <button onClick={() => setShowCoverPicker(true)}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground">
-                      <ImageIcon className="h-3 w-3" /> Add cover
-                    </button>
-                  )}
-                  {!page.icon && (
-                    <button onClick={() => { onUpdate(page.id, { icon: "file" }); setShowIconPicker(true); }}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground">
-                      <Sparkles className="h-3 w-3" /> Add icon
-                    </button>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Cover picker */}
-            <AnimatePresence>
-              {showCoverPicker && (
-                <motion.div {...fadeSlide} data-menu
-                  className="mb-4 rounded-xl border border-border bg-surface p-4 shadow-lg">
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-xs font-semibold">Choose a cover</span>
-                    <button onClick={() => setShowCoverPicker(false)} className="text-muted-foreground hover:text-foreground">
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="mb-3 grid grid-cols-4 gap-2">
-                    {coverImages.map((url, i) => (
-                      <motion.button key={url}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: i * 0.03, duration: 0.2 }}
-                        onClick={() => { onUpdate(page.id, { cover_url: url }); setShowCoverPicker(false); }}
-                        className="h-16 overflow-hidden rounded-lg transition-all hover:ring-2 hover:ring-accent hover:scale-105">
-                        <img src={url} alt="" className="h-full w-full object-cover" />
-                      </motion.button>
-                    ))}
-                  </div>
-                  <button onClick={() => coverInputRef.current?.click()}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border py-2.5 text-xs text-muted-foreground transition-colors hover:border-accent hover:text-foreground">
-                    <Upload className="h-3.5 w-3.5" />
-                    {uploading ? "Uploading..." : "Upload custom image"}
-                  </button>
-                  <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Icon + Title */}
-            <div className="flex items-start gap-3">
-              {page.icon && (
-                <div className="relative" data-menu>
-                  <motion.button
-                    onClick={() => setShowIconPicker(!showIconPicker)}
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent transition-colors hover:bg-accent/20"
-                  >
-                    <PageIcon className="h-6 w-6" />
-                  </motion.button>
-                  <AnimatePresence>
-                    {showIconPicker && (
-                      <motion.div {...dropdownAnim}
-                        className="absolute top-full left-0 z-50 mt-2 grid grid-cols-6 gap-1.5 rounded-2xl border border-border bg-surface p-3 shadow-xl"
-                        style={{ minWidth: 280 }}>
-                        {pageIcons.map(({ icon, Icon }, i) => (
-                          <motion.button
-                            key={icon}
-                            initial={{ opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ delay: i * 0.02, duration: 0.15 }}
-                            onClick={() => { onUpdate(page.id, { icon }); setShowIconPicker(false); }}
-                            whileHover={{ scale: 1.15 }}
-                            whileTap={{ scale: 0.9 }}
-                            className={cn("flex h-10 w-10 items-center justify-center rounded-xl transition-colors hover:bg-surface-hover",
-                              page.icon === icon && "bg-accent/15 text-accent ring-1 ring-accent/30")}>
-                            <Icon className="h-5 w-5" />
-                          </motion.button>
-                        ))}
+                        transition={swift}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-3 flex items-center gap-1.5 rounded-lg border border-line bg-paper-sunk p-1 pl-2.5">
+                          <input
+                            readOnly
+                            value={shareUrl}
+                            onFocus={(e) => e.target.select()}
+                            className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-ink-3 outline-none"
+                            aria-label="Share link"
+                          />
+                          <Button size="sm" variant="secondary" onClick={copyShare}>
+                            {copied ? <Check /> : <Copy />}
+                            {copied ? "Copied" : "Copy"}
+                          </Button>
+                        </div>
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </div>
+                </motion.div>
               )}
-              <input
-                className="flex-1 bg-transparent text-3xl font-bold tracking-tight text-foreground outline-none placeholder:text-muted-foreground/40"
-                value={page.title}
-                onChange={(e) => onUpdate(page.id, { title: e.target.value, updatedAt: Date.now() })}
-                placeholder="Untitled"
-              />
-            </div>
-          </div>
-
-          {/* Comments section */}
-          <AnimatePresence>
-            {pageComments.length > 0 && (
-              <motion.div {...fadeSlide} className="mb-4 space-y-1">
-                {pageComments.map((comment, i) => (
-                  <motion.div
-                    key={comment.id}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -8 }}
-                    transition={{ delay: i * 0.05, duration: 0.2 }}
-                    className="group flex items-start gap-2.5 rounded-lg py-1.5"
-                  >
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[10px] font-bold text-accent">
-                      {(comment.user_email || "U")[0].toUpperCase()}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold">{comment.user_email?.split("@")[0] || "User"}</span>
-                        <span className="text-[10px] text-muted-foreground">{new Date(comment.created_at).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-xs text-foreground/80 leading-relaxed">{comment.content}</p>
-                    </div>
-                    {comment.user_id === userId && (
-                      <motion.button
-                        onClick={() => onDeleteComment(comment.id)}
-                        whileHover={{ scale: 1.2 }}
-                        className="rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger">
-                        <Trash2 className="h-3 w-3" />
-                      </motion.button>
-                    )}
-                  </motion.div>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Comment input — shows on hover near comments area */}
-          <AnimatePresence>
-            {(titleHovered || commentOpen || commentText.length > 0 || pageComments.length > 0) && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.15 }}
-                className="mb-4 overflow-hidden"
-              >
-                <div className="flex items-center gap-2.5 border-b border-border pb-3">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground">
-                    You
-                  </div>
-                  <input
-                    id="comment-input"
-                    className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-                    placeholder="Add a comment..."
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && commentText.trim()) {
-                        onAddComment(page.id, commentText);
-                        setCommentText("");
-                      }
-                    }}
-                  />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Block editor */}
-          <div className="min-h-[50vh] pl-16">
-            <BlockEditor
-              blocks={currentBlocks}
-              onChange={handleBlocksChange}
-              onImageUpload={onImageUpload}
-              userEmail={userEmail}
-            />
+            </AnimatePresence>
           </div>
         </div>
       </div>
 
-      {/* Status bar */}
-      <div className="flex items-center gap-3 border-t border-border px-6 py-1.5 text-[10px] text-muted-foreground">
-        <span>{page.content.length} characters</span>
-        <span>{page.content.split(/\s+/).filter(Boolean).length} words</span>
-        {pageComments.length > 0 && (
-          <span className="flex items-center gap-1">
-            <MessageCircle className="h-3 w-3" /> {pageComments.length}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-1">
-          <CheckCircle className="h-3 w-3 text-green-500" /> Saved
-        </span>
+      <div className="flex min-h-0 flex-1">
+        {/* Document */}
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          {page.cover_url && (
+            <div className="group relative h-[180px] w-full overflow-hidden sm:h-[220px]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={page.cover_url} alt="" className="h-full w-full object-cover" />
+              <button
+                onClick={() => onUpdate(page.id, { cover_url: null })}
+                className="absolute right-4 top-4 rounded-lg bg-black/50 px-2.5 py-1.5 text-[12px] text-white opacity-0 backdrop-blur transition-opacity group-hover:opacity-100"
+              >
+                Remove cover
+              </button>
+            </div>
+          )}
+
+          <div className={cn("mx-auto w-full max-w-[760px] px-8 pb-24", page.cover_url ? "pt-8" : "pt-12")}>
+            {/* Icon + cover controls */}
+            <div className="mb-3 flex items-center gap-1">
+              <div className="relative" data-popover>
+                <button
+                  onClick={() => setIconOpen((v) => !v)}
+                  aria-label="Change page icon"
+                  className="press flex size-11 items-center justify-center rounded-lg text-flame transition-colors hover:bg-paper-sunk [--press-depth:1px]"
+                >
+                  <PageIcon name={page.icon} className="size-7" strokeWidth={1.5} />
+                </button>
+
+                <AnimatePresence>
+                  {iconOpen && (
+                    <motion.div
+                      variants={menu}
+                      initial="hidden"
+                      animate="show"
+                      exit="exit"
+                      className="absolute left-0 top-full z-50 mt-1 w-[268px] rounded-xl border border-line bg-card p-2"
+                      style={{ boxShadow: "var(--lift-lg)" }}
+                    >
+                      <p className="label-mono px-1 pb-1.5 text-[9px]">Page icon</p>
+                      <div className="grid grid-cols-7 gap-0.5">
+                        {PAGE_ICONS.map((entry) => (
+                          <button
+                            key={entry.name}
+                            onClick={() => {
+                              onUpdate(page.id, { icon: entry.name });
+                              setIconOpen(false);
+                            }}
+                            title={entry.label}
+                            aria-label={entry.label}
+                            className={cn(
+                              "flex aspect-square items-center justify-center rounded-lg transition-colors",
+                              page.icon === entry.name
+                                ? "bg-flame-tint text-flame"
+                                : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+                            )}
+                          >
+                            <entry.Icon className="size-4" />
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {!page.cover_url && (
+                <label className="press flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink [--press-depth:1px]">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const url = await upload.upload(file);
+                      if (url) onUpdate(page.id, { cover_url: url });
+                    }}
+                  />
+                  {upload.uploading ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <ImagePlus className="size-3.5" />
+                  )}
+                  Add cover
+                </label>
+              )}
+            </div>
+
+            {/* Title */}
+            <input
+              value={page.title}
+              onChange={(e) => onUpdate(page.id, { title: e.target.value })}
+              placeholder="Untitled"
+              aria-label="Page title"
+              className="w-full bg-transparent font-display text-[2.6rem] font-semibold leading-tight tracking-tight text-ink outline-none placeholder:text-ink-4/60"
+            />
+
+            <p className="mb-6 mt-2 text-[12px] text-ink-4">
+              {words} {words === 1 ? "word" : "words"} · updated{" "}
+              {new Date(page.updated_at).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+              })}
+            </p>
+
+            {/* AI result, offered rather than applied */}
+            <AnimatePresence>
+              {(pendingResult !== null || aiProblem) && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={smooth}
+                  className="mb-6 overflow-hidden"
+                >
+                  {aiProblem ? (
+                    <div className="flex items-start gap-2 rounded-xl bg-danger-tint px-4 py-3">
+                      <p className="flex-1 text-[13px] text-danger">{aiProblem}</p>
+                      <button
+                        onClick={() => setAiProblem(null)}
+                        aria-label="Dismiss"
+                        className="text-danger"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-line bg-paper-sunk p-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <Sparkles className="size-3.5 text-flame" />
+                        <p className="label-mono text-[9px]">Lumen suggests</p>
+                        {aiBusy && <Loader2 className="size-3 animate-spin text-ink-4" />}
+                      </div>
+                      <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink-2">
+                        {pendingResult}
+                      </p>
+                      {!aiBusy && pendingResult && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button size="sm" variant="primary" onClick={() => acceptResult("replace")}>
+                            Replace page
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={() => acceptResult("append")}>
+                            Add to end
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setPendingResult(null)}>
+                            Discard
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <BlockEditor blocks={blocks} onChange={handleBlocks} onUpload={upload.upload} />
+          </div>
+        </div>
+
+        {/* Comments */}
+        <AnimatePresence>
+          {commentsOpen && (
+            <motion.aside
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 300, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={smooth}
+              className="shrink-0 overflow-hidden border-l border-line bg-card"
+              aria-label="Comments"
+            >
+              <CommentsPanel
+                comments={pageComments}
+                userId={userId}
+                onAdd={(text) => onAddComment(page.id, text)}
+                onDelete={onDeleteComment}
+                onClose={() => setCommentsOpen(false)}
+              />
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
+/* ── Comments ─────────────────────────────────────────────────────────── */
+
+function CommentsPanel({
+  comments,
+  userId,
+  onAdd,
+  onDelete,
+  onClose,
+}: {
+  comments: Comment[];
+  userId: string;
+  onAdd: (text: string) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+
+  return (
+    <div className="flex h-full w-[300px] flex-col">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
+        <MessageSquare className="size-3.5 text-ink-4" />
+        <h2 className="flex-1 text-[13px] font-semibold text-ink">Comments</h2>
+        <button
+          onClick={onClose}
+          aria-label="Close comments"
+          className="press rounded-lg p-1.5 text-ink-4 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
+        >
+          <X className="size-4" />
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-3">
+        {comments.length === 0 ? (
+          <p className="px-2 py-8 text-center text-[13px] leading-relaxed text-ink-4">
+            No comments yet. Notes to yourself count.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {comments.map((comment) => (
+              <li key={comment.id} className="group rounded-lg border border-line bg-paper-sunk p-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex size-5 items-center justify-center rounded-full bg-flame-tint text-[10px] font-semibold text-flame">
+                    {comment.author_name.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="flex-1 truncate text-[12px] font-medium text-ink-2">
+                    {comment.author_name}
+                  </span>
+                  {comment.user_id === userId && (
+                    <button
+                      onClick={() => onDelete(comment.id)}
+                      aria-label="Delete comment"
+                      className="text-ink-4 opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  )}
+                </div>
+                <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink-2">
+                  {comment.content}
+                </p>
+                <p className="mt-1.5 text-[11px] text-ink-4">
+                  {new Date(comment.created_at).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!text.trim()) return;
+          onAdd(text);
+          setText("");
+        }}
+        className="shrink-0 border-t border-line p-3"
+      >
+        <div className="flex items-end gap-2 rounded-xl border border-line bg-paper-sunk p-1.5 focus-within:border-flame">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (text.trim()) {
+                  onAdd(text);
+                  setText("");
+                }
+              }
+            }}
+            rows={1}
+            placeholder="Add a comment…"
+            aria-label="Add a comment"
+            className="max-h-24 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-4"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim()}
+            aria-label="Post comment"
+            className={cn(
+              "press flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors [--press-depth:1px]",
+              text.trim() ? "bg-flame text-flame-ink" : "text-ink-4",
+            )}
+          >
+            <Send className="size-3.5" />
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

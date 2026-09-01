@@ -1,798 +1,970 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, KeyboardEvent } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
-  Plus, GripVertical, Type, Heading1, Heading2, Heading3,
-  List, ListOrdered, CheckSquare, Quote, AlertCircle, Minus,
-  Code, ImageIcon, Trash2, Copy, ArrowUp, ArrowDown,
-  RefreshCw, Palette, ChevronRight, MessageCircle,
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Code2,
+  GripVertical,
+  Heading1,
+  Heading2,
+  Heading3,
+  Image as ImageIcon,
+  List,
+  ListOrdered,
+  type LucideIcon,
+  Minus,
+  Plus,
+  Quote,
+  SquareCheck,
+  Trash2,
+  Type,
 } from "lucide-react";
-import type { Block, BlockType, BlockComment } from "@/lib/types";
+import { createBlock } from "@/lib/blocks";
+import type { Block, BlockType } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { menu, pop } from "@/lib/motion";
 
-const blockTypes: { type: BlockType; icon: typeof Type; label: string; shortcut?: string }[] = [
-  { type: "text", icon: Type, label: "Text" },
-  { type: "h1", icon: Heading1, label: "Heading 1", shortcut: "#" },
-  { type: "h2", icon: Heading2, label: "Heading 2", shortcut: "##" },
-  { type: "h3", icon: Heading3, label: "Heading 3", shortcut: "###" },
-  { type: "bulleted_list", icon: List, label: "Bulleted list", shortcut: "-" },
-  { type: "numbered_list", icon: ListOrdered, label: "Numbered list", shortcut: "1." },
-  { type: "todo", icon: CheckSquare, label: "To-do list", shortcut: "[]" },
-  { type: "quote", icon: Quote, label: "Quote", shortcut: ">" },
-  { type: "callout", icon: AlertCircle, label: "Callout" },
-  { type: "divider", icon: Minus, label: "Divider", shortcut: "---" },
-  { type: "code", icon: Code, label: "Code block", shortcut: "```" },
-  { type: "image", icon: ImageIcon, label: "Image" },
-];
+/**
+ * Block editor.
+ *
+ * Each block is its own contentEditable element, kept uncontrolled: React sets
+ * the text once when the block mounts or its id changes, and never again while
+ * the caret is inside it. Writing back into a focused contentEditable on every
+ * keystroke is what makes home-grown editors jump the cursor to the end of the
+ * line, and it is the single most common way they feel broken.
+ */
 
-const textColors = [
-  { label: "Default", value: "" },
-  { label: "Gray", value: "#9ca3af" },
-  { label: "Brown", value: "#92400e" },
-  { label: "Orange", value: "#f97316" },
-  { label: "Yellow", value: "#eab308" },
-  { label: "Green", value: "#22c55e" },
-  { label: "Blue", value: "#3b82f6" },
-  { label: "Purple", value: "#8b5cf6" },
-  { label: "Pink", value: "#ec4899" },
-  { label: "Red", value: "#ef4444" },
-];
-
-const bgColors = [
-  { label: "Default", value: "" },
-  { label: "Gray", value: "rgba(156,163,175,0.12)" },
-  { label: "Brown", value: "rgba(146,64,14,0.12)" },
-  { label: "Orange", value: "rgba(249,115,22,0.12)" },
-  { label: "Yellow", value: "rgba(234,179,8,0.12)" },
-  { label: "Green", value: "rgba(34,197,94,0.12)" },
-  { label: "Blue", value: "rgba(59,130,246,0.12)" },
-  { label: "Purple", value: "rgba(139,92,246,0.12)" },
-  { label: "Pink", value: "rgba(236,72,153,0.12)" },
-  { label: "Red", value: "rgba(239,68,68,0.12)" },
-];
-
-let _blockId = 0;
-const newBlockId = () => `b-${++_blockId}-${Date.now()}`;
-
-export function createBlock(type: BlockType = "text", content = ""): Block {
-  return { id: newBlockId(), type, content };
+interface BlockSpec {
+  type: BlockType;
+  label: string;
+  hint: string;
+  Icon: LucideIcon;
+  /** Typed prefix that converts the block, e.g. "# " for a heading. */
+  shortcut?: string;
 }
 
-export function parseContentToBlocks(content: string): Block[] {
-  if (!content) return [createBlock()];
-  try {
-    const parsed = JSON.parse(content);
-    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id) return parsed;
-  } catch { /* not JSON */ }
-  const lines = content.split("\n");
-  if (lines.length === 0) return [createBlock()];
-  return lines.map((line) => createBlock("text", line));
+const BLOCK_TYPES: BlockSpec[] = [
+  { type: "text", label: "Text", hint: "Plain paragraph", Icon: Type },
+  { type: "h1", label: "Heading 1", hint: "Section title", Icon: Heading1, shortcut: "# " },
+  { type: "h2", label: "Heading 2", hint: "Subsection", Icon: Heading2, shortcut: "## " },
+  { type: "h3", label: "Heading 3", hint: "Minor heading", Icon: Heading3, shortcut: "### " },
+  { type: "todo", label: "To-do", hint: "Checkbox item", Icon: SquareCheck, shortcut: "[] " },
+  { type: "bulleted_list", label: "Bulleted list", hint: "Unordered", Icon: List, shortcut: "- " },
+  {
+    type: "numbered_list",
+    label: "Numbered list",
+    hint: "Ordered",
+    Icon: ListOrdered,
+    shortcut: "1. ",
+  },
+  { type: "quote", label: "Quote", hint: "Set apart", Icon: Quote, shortcut: "> " },
+  { type: "callout", label: "Callout", hint: "Highlighted note", Icon: Quote },
+  { type: "code", label: "Code", hint: "Monospaced block", Icon: Code2, shortcut: "```" },
+  { type: "divider", label: "Divider", hint: "Horizontal rule", Icon: Minus, shortcut: "---" },
+  { type: "image", label: "Image", hint: "Upload or paste", Icon: ImageIcon },
+];
+
+/** Types where Enter should continue the same kind of block. */
+const CONTINUES = new Set<BlockType>(["bulleted_list", "numbered_list", "todo"]);
+
+interface FocusRequest {
+  id: string;
+  /** Where to place the caret once the block is focused. */
+  at: "start" | "end";
+  /** Bumped so repeated requests for the same block still fire. */
+  nonce: number;
 }
 
-export function blocksToContent(blocks: Block[]): string {
-  return JSON.stringify(blocks);
-}
-
-interface BlockEditorProps {
+export function BlockEditor({
+  blocks,
+  onChange,
+  onUpload,
+  readOnly = false,
+}: {
   blocks: Block[];
   onChange: (blocks: Block[]) => void;
-  onImageUpload: (file: File) => Promise<string | null>;
-  userEmail?: string;
-}
+  onUpload?: (file: File) => Promise<string | null>;
+  readOnly?: boolean;
+}) {
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
+  const [slashFor, setSlashFor] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
-export function BlockEditor({ blocks, onChange, onImageUpload, userEmail }: BlockEditorProps) {
-  const [plusMenuIdx, setPlusMenuIdx] = useState<number | null>(null);
-  const [actionsMenuIdx, setActionsMenuIdx] = useState<number | null>(null);
-  const [turnIntoOpen, setTurnIntoOpen] = useState(false);
-  const [colorOpen, setColorOpen] = useState(false);
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-  const [plusFilter, setPlusFilter] = useState("");
-  const [commentingIdx, setCommentingIdx] = useState<number | null>(null);
-  const [commentText, setCommentText] = useState("");
-  const blockRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const nonce = useRef(0);
 
-  const focusBlock = useCallback((id: string, end = false) => {
-    requestAnimationFrame(() => {
-      const el = blockRefs.current.get(id);
-      if (!el) return;
-      el.focus();
-      if (end && el.textContent) {
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        sel?.removeAllRanges();
-        sel?.addRange(range);
-      }
-    });
+  const focus = useCallback((id: string, at: "start" | "end" = "end") => {
+    nonce.current += 1;
+    setFocusRequest({ id, at, nonce: nonce.current });
   }, []);
 
-  useEffect(() => {
-    if (plusMenuIdx === null && actionsMenuIdx === null) return;
-    const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-block-menu]")) {
-        setPlusMenuIdx(null);
-        setActionsMenuIdx(null);
-        setTurnIntoOpen(false);
-        setColorOpen(false);
-        setPlusFilter("");
-      }
-    };
-    setTimeout(() => window.addEventListener("click", handler), 0);
-    return () => window.removeEventListener("click", handler);
-  }, [plusMenuIdx, actionsMenuIdx]);
+  const indexOf = useCallback((id: string) => blocks.findIndex((b) => b.id === id), [blocks]);
 
-  const updateBlock = useCallback((idx: number, updates: Partial<Block>) => {
-    const next = [...blocks];
-    next[idx] = { ...next[idx], ...updates };
-    onChange(next);
-  }, [blocks, onChange]);
+  /* ── Mutations ──────────────────────────────────────────────────────── */
 
-  const insertBlock = useCallback((afterIdx: number, type: BlockType = "text") => {
-    const block = createBlock(type);
-    const next = [...blocks];
-    next.splice(afterIdx + 1, 0, block);
-    onChange(next);
-    setPlusMenuIdx(null);
-    setPlusFilter("");
-    if (type !== "divider") focusBlock(block.id);
-  }, [blocks, onChange, focusBlock]);
+  const update = useCallback(
+    (id: string, patch: Partial<Block>) => {
+      onChange(blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+    },
+    [blocks, onChange],
+  );
 
-  const deleteBlock = useCallback((idx: number) => {
-    if (blocks.length <= 1) {
-      onChange([createBlock()]);
-      return;
-    }
-    const next = [...blocks];
-    next.splice(idx, 1);
-    onChange(next);
-    setActionsMenuIdx(null);
-    const focusIdx = Math.max(0, idx - 1);
-    focusBlock(next[focusIdx].id, true);
-  }, [blocks, onChange, focusBlock]);
+  const insertAfter = useCallback(
+    (id: string, type: BlockType = "text", content = "") => {
+      const index = indexOf(id);
+      if (index === -1) return;
+      const block = createBlock(type, content);
+      const next = [...blocks];
+      next.splice(index + 1, 0, block);
+      onChange(next);
+      focus(block.id, "start");
+      return block.id;
+    },
+    [blocks, indexOf, onChange, focus],
+  );
 
-  const duplicateBlock = useCallback((idx: number) => {
-    const block = { ...blocks[idx], id: newBlockId() };
-    const next = [...blocks];
-    next.splice(idx + 1, 0, block);
-    onChange(next);
-    setActionsMenuIdx(null);
-  }, [blocks, onChange]);
-
-  const moveBlock = useCallback((idx: number, dir: -1 | 1) => {
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= blocks.length) return;
-    const next = [...blocks];
-    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-    onChange(next);
-    setActionsMenuIdx(newIdx);
-  }, [blocks, onChange]);
-
-  const handleKeyDown = useCallback((e: KeyboardEvent, idx: number) => {
-    const block = blocks[idx];
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      if (block.type === "divider") return;
-      e.preventDefault();
-      insertBlock(idx);
-      return;
-    }
-
-    if (e.key === "Backspace") {
-      const el = blockRefs.current.get(block.id);
-      const sel = window.getSelection();
-      // Only delete block if cursor is at position 0 and block is empty
-      if (el && sel && sel.anchorOffset === 0 && !block.content && blocks.length > 1) {
-        e.preventDefault();
-        deleteBlock(idx);
+  const remove = useCallback(
+    (id: string) => {
+      // A document must always have somewhere to type.
+      if (blocks.length === 1) {
+        onChange([createBlock()]);
+        focus(blocks[0].id);
         return;
       }
-    }
+      const index = indexOf(id);
+      const previous = blocks[index - 1];
+      onChange(blocks.filter((b) => b.id !== id));
+      if (previous) focus(previous.id, "end");
+    },
+    [blocks, indexOf, onChange, focus],
+  );
 
-    if (e.key === "ArrowUp" && idx > 0) {
-      const sel = window.getSelection();
-      if (sel && sel.anchorOffset === 0) {
-        e.preventDefault();
-        focusBlock(blocks[idx - 1].id, true);
-      }
-    }
+  const move = useCallback(
+    (fromId: string, toId: string) => {
+      const from = indexOf(fromId);
+      const to = indexOf(toId);
+      if (from === -1 || to === -1 || from === to) return;
+      const next = [...blocks];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      onChange(next);
+    },
+    [blocks, indexOf, onChange],
+  );
 
-    if (e.key === "ArrowDown" && idx < blocks.length - 1) {
-      const el = blockRefs.current.get(block.id);
-      const sel = window.getSelection();
-      if (el && sel && sel.anchorOffset === (el.textContent?.length || 0)) {
-        e.preventDefault();
-        focusBlock(blocks[idx + 1].id);
-      }
-    }
+  /* ── Keyboard ───────────────────────────────────────────────────────── */
 
-    if (e.key === "/" && !block.content) {
-      e.preventDefault();
-      setPlusMenuIdx(idx);
-      setPlusFilter("");
-    }
-  }, [blocks, insertBlock, deleteBlock, focusBlock]);
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>, block: Block) => {
+      const element = event.currentTarget;
+      const index = indexOf(block.id);
+      const selection = window.getSelection();
+      const atStart = selection?.anchorOffset === 0 && selection.isCollapsed;
+      const atEnd =
+        selection?.isCollapsed &&
+        selection.anchorOffset === (element.textContent?.length ?? 0);
 
-  // Debounce content updates to avoid cursor jumping
-  const inputTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const handleInput = useCallback((idx: number, el: HTMLElement) => {
-    const text = el.textContent || "";
-    // Update internal ref immediately for key handlers
-    blocks[idx] = { ...blocks[idx], content: text };
-    clearTimeout(inputTimer.current);
-    inputTimer.current = setTimeout(() => {
-      updateBlock(idx, { content: text });
-    }, 100);
-  }, [blocks, updateBlock]);
+      if (event.key === "Enter" && !event.shiftKey) {
+        // Code blocks take real newlines instead.
+        if (block.type === "code") return;
+        event.preventDefault();
 
-  const addBlockComment = useCallback((idx: number, text: string) => {
-    if (!text.trim()) return;
-    const comment: BlockComment = {
-      id: `bc-${Date.now()}`,
-      text: text.trim(),
-      author: userEmail || "You",
-      timestamp: Date.now(),
-    };
-    const existing = blocks[idx].comments || [];
-    updateBlock(idx, { comments: [...existing, comment] });
-    setCommentText("");
-    setCommentingIdx(null);
-  }, [blocks, updateBlock, userEmail]);
+        const text = element.textContent ?? "";
 
-  const deleteBlockComment = useCallback((blockIdx: number, commentId: string) => {
-    const existing = blocks[blockIdx].comments || [];
-    updateBlock(blockIdx, { comments: existing.filter((c) => c.id !== commentId) });
-  }, [blocks, updateBlock]);
+        // Enter on an empty list item ends the list rather than adding another.
+        if (CONTINUES.has(block.type) && text.trim() === "") {
+          update(block.id, { type: "text", checked: undefined });
+          return;
+        }
 
-  const handleAddImage = useCallback(async (idx: number) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const url = await onImageUpload(file);
-      if (url) {
-        const block = createBlock("image");
-        block.imageUrl = url;
+        // Split at the caret, so Enter mid-line behaves like a real editor.
+        const caret = selection?.anchorOffset ?? text.length;
+        const before = text.slice(0, caret);
+        const after = text.slice(caret);
+
+        if (before !== text) {
+          element.textContent = before;
+          update(block.id, { content: before });
+        }
+
+        const nextType: BlockType = CONTINUES.has(block.type) ? block.type : "text";
+        const created = createBlock(nextType, after);
+        if (nextType === "todo") created.checked = false;
+
         const next = [...blocks];
-        next.splice(idx + 1, 0, block);
+        next[index] = { ...next[index], content: before };
+        next.splice(index + 1, 0, created);
         onChange(next);
+        focus(created.id, "start");
+        return;
       }
-    };
-    input.click();
-    setPlusMenuIdx(null);
-  }, [blocks, onChange, onImageUpload]);
 
-  const filteredBlockTypes = plusFilter
-    ? blockTypes.filter((b) => b.label.toLowerCase().includes(plusFilter.toLowerCase()))
-    : blockTypes;
+      if (event.key === "Backspace" && atStart) {
+        // Demote a styled block before deleting it, so one Backspace never
+        // destroys a paragraph the writer only wanted to un-format.
+        if (block.type !== "text" && block.type !== "divider") {
+          event.preventDefault();
+          update(block.id, { type: "text", checked: undefined });
+          return;
+        }
+        if (index > 0) {
+          event.preventDefault();
+          const previous = blocks[index - 1];
+          const merged = previous.content + (element.textContent ?? "");
+          const next = blocks.filter((b) => b.id !== block.id);
+          const previousIndex = next.findIndex((b) => b.id === previous.id);
+          if (previousIndex !== -1) next[previousIndex] = { ...previous, content: merged };
+          onChange(next);
+          focus(previous.id, "end");
+        }
+        return;
+      }
 
-  // Show icons when block is hovered OR focused (empty) OR has an open menu
-  const showIcons = (idx: number) =>
-    hoveredIdx === idx || plusMenuIdx === idx || actionsMenuIdx === idx;
+      if (event.key === "ArrowUp" && atStart && index > 0) {
+        event.preventDefault();
+        focus(blocks[index - 1].id, "end");
+        return;
+      }
+
+      if (event.key === "ArrowDown" && atEnd && index < blocks.length - 1) {
+        event.preventDefault();
+        focus(blocks[index + 1].id, "start");
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setSlashFor(null);
+        return;
+      }
+
+      // Alt+arrows reorder without reaching for the mouse.
+      if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        const target = event.key === "ArrowUp" ? index - 1 : index + 1;
+        if (target >= 0 && target < blocks.length) {
+          event.preventDefault();
+          move(block.id, blocks[target].id);
+          focus(block.id, "end");
+        }
+      }
+    },
+    [blocks, indexOf, onChange, update, focus, move],
+  );
+
+  /**
+   * Markdown-style prefixes, applied as they are typed.
+   * Returns true when the input was consumed by a conversion.
+   */
+  const applyShortcut = useCallback(
+    (block: Block, text: string, element: HTMLElement): boolean => {
+      if (block.type !== "text") return false;
+
+      for (const spec of BLOCK_TYPES) {
+        if (!spec.shortcut) continue;
+        if (text !== spec.shortcut) continue;
+
+        element.textContent = "";
+        update(block.id, {
+          type: spec.type,
+          content: "",
+          ...(spec.type === "todo" ? { checked: false } : {}),
+        });
+        if (spec.type === "divider") insertAfter(block.id);
+        return true;
+      }
+      return false;
+    },
+    [update, insertAfter],
+  );
 
   return (
-    <div className="space-y-0.5">
-      {blocks.map((block, idx) => (
-        <div
+    <div className="flex flex-col">
+      {blocks.map((block, index) => (
+        <BlockRow
           key={block.id}
-          className="group/block relative -ml-14 pl-14"
-          onMouseEnter={() => setHoveredIdx(idx)}
-          onMouseLeave={() => { if (plusMenuIdx !== idx && actionsMenuIdx !== idx) setHoveredIdx(null); }}
-        >
-          {/* Left icons: + and ⋮⋮ — inside the padded hover zone */}
-          <AnimatePresence>
-            {showIcons(idx) && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.08 }}
-                className="absolute left-0 top-0.5 flex items-center gap-0"
-              >
-                <div className="relative" data-block-menu>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPlusMenuIdx(plusMenuIdx === idx ? null : idx);
-                      setActionsMenuIdx(null);
-                      setPlusFilter("");
-                    }}
-                    className="rounded p-1 text-muted-foreground/40 transition-colors hover:bg-surface-hover hover:text-foreground"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </button>
-
-                  <AnimatePresence>
-                    {plusMenuIdx === idx && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute left-0 top-full z-50 mt-1 w-64 rounded-xl border border-border bg-surface shadow-xl overflow-hidden"
-                      >
-                        <div className="border-b border-border px-3 py-2">
-                          <input
-                            autoFocus
-                            className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-                            placeholder="Type to filter..."
-                            value={plusFilter}
-                            onChange={(e) => setPlusFilter(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Escape") { setPlusMenuIdx(null); setPlusFilter(""); }
-                              if (e.key === "Enter" && filteredBlockTypes.length > 0) {
-                                const bt = filteredBlockTypes[0];
-                                if (bt.type === "image") handleAddImage(idx);
-                                else insertBlock(idx, bt.type);
-                              }
-                            }}
-                          />
-                        </div>
-                        <div className="max-h-72 overflow-y-auto py-1">
-                          <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">Basic blocks</div>
-                          {filteredBlockTypes.map((bt, i) => (
-                            <motion.button
-                              key={bt.type}
-                              initial={{ opacity: 0, x: -4 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: i * 0.015 }}
-                              onClick={() => {
-                                if (bt.type === "image") handleAddImage(idx);
-                                else insertBlock(idx, bt.type);
-                              }}
-                              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover"
-                            >
-                              <bt.icon className="h-4 w-4 text-muted-foreground" />
-                              <span className="flex-1 text-left">{bt.label}</span>
-                              {bt.shortcut && <span className="text-[10px] text-muted-foreground/50">{bt.shortcut}</span>}
-                            </motion.button>
-                          ))}
-                          {filteredBlockTypes.length === 0 && (
-                            <p className="px-3 py-3 text-xs text-muted-foreground">No results</p>
-                          )}
-                        </div>
-                        <div className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-                          Close <span className="ml-1 rounded border border-border px-1 py-0.5 text-[9px]">esc</span>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                <div className="relative" data-block-menu>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActionsMenuIdx(actionsMenuIdx === idx ? null : idx);
-                      setPlusMenuIdx(null);
-                      setTurnIntoOpen(false);
-                      setColorOpen(false);
-                    }}
-                    className="rounded p-1 text-muted-foreground/40 transition-colors hover:bg-surface-hover hover:text-foreground"
-                  >
-                    <GripVertical className="h-4 w-4" />
-                  </button>
-
-                  <AnimatePresence>
-                    {actionsMenuIdx === idx && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute left-0 top-full z-50 mt-1 w-52 rounded-xl border border-border bg-surface shadow-xl overflow-hidden"
-                      >
-                        <div className="py-1">
-                          {/* Turn into */}
-                          <div className="relative">
-                            <button
-                              onClick={() => { setTurnIntoOpen(!turnIntoOpen); setColorOpen(false); }}
-                              className={cn("flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover", turnIntoOpen && "bg-surface-hover")}
-                            >
-                              <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="flex-1 text-left">Turn into</span>
-                              <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                            </button>
-
-                            <AnimatePresence>
-                              {turnIntoOpen && (
-                                <motion.div
-                                  initial={{ opacity: 0, x: -4 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  exit={{ opacity: 0, x: -4 }}
-                                  transition={{ duration: 0.1 }}
-                                  className="absolute left-full top-0 z-50 ml-1 w-48 rounded-xl border border-border bg-surface py-1 shadow-xl max-h-72 overflow-y-auto"
-                                >
-                                  {blockTypes.filter((b) => b.type !== "image" && b.type !== "divider").map((bt) => (
-                                    <button key={bt.type}
-                                      onClick={() => { updateBlock(idx, { type: bt.type }); setActionsMenuIdx(null); setTurnIntoOpen(false); }}
-                                      className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover", block.type === bt.type && "text-accent")}
-                                    >
-                                      <bt.icon className="h-3.5 w-3.5" />
-                                      {bt.label}
-                                      {block.type === bt.type && <span className="ml-auto text-accent">✓</span>}
-                                    </button>
-                                  ))}
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-
-                          {/* Color */}
-                          <div className="relative">
-                            <button
-                              onClick={() => { setColorOpen(!colorOpen); setTurnIntoOpen(false); }}
-                              className={cn("flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover", colorOpen && "bg-surface-hover")}
-                            >
-                              <Palette className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="flex-1 text-left">Color</span>
-                              <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                            </button>
-
-                            <AnimatePresence>
-                              {colorOpen && (
-                                <motion.div
-                                  initial={{ opacity: 0, x: -4 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  exit={{ opacity: 0, x: -4 }}
-                                  transition={{ duration: 0.1 }}
-                                  className="absolute left-full top-0 z-50 ml-1 w-52 rounded-xl border border-border bg-surface py-1 shadow-xl max-h-80 overflow-y-auto"
-                                >
-                                  <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">Text color</div>
-                                  {textColors.map((c) => (
-                                    <button key={`t-${c.label}`}
-                                      onClick={() => { updateBlock(idx, { color: c.value }); setActionsMenuIdx(null); setColorOpen(false); }}
-                                      className="flex w-full items-center gap-2 px-3 py-1 text-xs hover:bg-surface-hover">
-                                      <span className="flex h-5 w-5 items-center justify-center rounded text-xs font-bold" style={{ color: c.value || "inherit" }}>A</span>
-                                      {c.label} text
-                                    </button>
-                                  ))}
-                                  <div className="mx-3 my-1 h-px bg-border" />
-                                  <div className="px-3 py-1 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">Background</div>
-                                  {bgColors.map((c) => (
-                                    <button key={`b-${c.label}`}
-                                      onClick={() => { updateBlock(idx, { bgColor: c.value }); setActionsMenuIdx(null); setColorOpen(false); }}
-                                      className="flex w-full items-center gap-2 px-3 py-1 text-xs hover:bg-surface-hover">
-                                      <span className="flex h-5 w-5 items-center justify-center rounded text-xs font-bold" style={{ backgroundColor: c.value || "var(--muted)" }}>A</span>
-                                      {c.label} background
-                                    </button>
-                                  ))}
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-
-                          <div className="mx-2 my-1 h-px bg-border" />
-
-                          <button onClick={() => duplicateBlock(idx)}
-                            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover">
-                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="flex-1 text-left">Duplicate</span>
-                            <span className="text-[10px] text-muted-foreground/50">Ctrl+D</span>
-                          </button>
-                          <button onClick={() => moveBlock(idx, -1)} disabled={idx === 0}
-                            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover disabled:opacity-30">
-                            <ArrowUp className="h-3.5 w-3.5 text-muted-foreground" /> Move up
-                          </button>
-                          <button onClick={() => moveBlock(idx, 1)} disabled={idx === blocks.length - 1}
-                            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover disabled:opacity-30">
-                            <ArrowDown className="h-3.5 w-3.5 text-muted-foreground" /> Move down
-                          </button>
-
-                          <button onClick={() => {
-                              setActionsMenuIdx(null);
-                              setCommentingIdx(idx);
-                              setCommentText("");
-                            }}
-                            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover">
-                            <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="flex-1 text-left">Comment</span>
-                            <span className="text-[10px] text-muted-foreground/50">Ctrl+M</span>
-                          </button>
-
-                          <div className="mx-2 my-1 h-px bg-border" />
-
-                          <button onClick={() => deleteBlock(idx)}
-                            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10">
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span className="flex-1 text-left">Delete</span>
-                            <span className="text-[10px] text-muted-foreground/50">Del</span>
-                          </button>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Block content */}
-          <div className="flex-1 min-w-0">
-            <BlockRenderer
-              block={block}
-              idx={idx}
-              blockRefs={blockRefs}
-              onInput={handleInput}
-              onKeyDown={handleKeyDown}
-              onUpdate={(updates) => updateBlock(idx, updates)}
-              onImageUpload={onImageUpload}
-              onFocus={() => setFocusedIdx(idx)}
-              onBlur={() => setFocusedIdx(null)}
-              onMoveUp={idx > 0 ? () => moveBlock(idx, -1) : undefined}
-              onMoveDown={idx < blocks.length - 1 ? () => moveBlock(idx, 1) : undefined}
-              onDelete={() => deleteBlock(idx)}
-            />
-
-            {/* Block comments */}
-            {(block.comments && block.comments.length > 0) && (
-              <div className="ml-1 mt-1 space-y-1">
-                {block.comments.map((c) => (
-                  <div key={c.id} className="group/comment flex items-start gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5">
-                    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[9px] font-bold text-accent">
-                      {c.author[0].toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[11px] font-semibold">{c.author.split("@")[0]}</span>
-                        <span className="text-[9px] text-muted-foreground">{new Date(c.timestamp).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-[11px] text-foreground/75 leading-relaxed">{c.text}</p>
-                    </div>
-                    <button onClick={() => deleteBlockComment(idx, c.id)}
-                      className="rounded p-0.5 opacity-0 transition-opacity group-hover/comment:opacity-100 text-muted-foreground hover:text-danger">
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Comment input for this block */}
-            <AnimatePresence>
-              {commentingIdx === idx && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="mt-1 ml-1 overflow-hidden"
-                >
-                  <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5">
-                    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[9px] font-bold text-muted-foreground">
-                      {(userEmail || "Y")[0].toUpperCase()}
-                    </div>
-                    <input
-                      autoFocus
-                      className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
-                      placeholder="Add a comment..."
-                      value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && commentText.trim()) {
-                          addBlockComment(idx, commentText);
-                        }
-                        if (e.key === "Escape") {
-                          setCommentingIdx(null);
-                          setCommentText("");
-                        }
-                      }}
-                      onBlur={() => {
-                        if (!commentText.trim()) {
-                          setCommentingIdx(null);
-                        }
-                      }}
-                    />
-                    <button
-                      onClick={() => addBlockComment(idx, commentText)}
-                      disabled={!commentText.trim()}
-                      className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-accent-foreground disabled:opacity-30"
-                    >
-                      Send
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Comment icon on hover (right side) */}
-            <AnimatePresence>
-              {hoveredIdx === idx && commentingIdx !== idx && block.type !== "divider" && (
-                <motion.button
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.1 }}
-                  onClick={() => { setCommentingIdx(idx); setCommentText(""); }}
-                  className="absolute right-0 top-1 rounded p-1 text-muted-foreground/30 transition-colors hover:bg-surface-hover hover:text-foreground"
-                  title="Comment"
-                >
-                  <MessageCircle className="h-3.5 w-3.5" />
-                </motion.button>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
+          block={block}
+          index={index}
+          blocks={blocks}
+          readOnly={readOnly}
+          focusRequest={focusRequest?.id === block.id ? focusRequest : null}
+          slashOpen={slashFor === block.id}
+          dragging={dragging === block.id}
+          isDropTarget={dropTarget === block.id}
+          onOpenSlash={(open) => setSlashFor(open ? block.id : null)}
+          onUpdate={update}
+          onInsertAfter={insertAfter}
+          onRemove={remove}
+          onFocusBlock={focus}
+          onKeyDown={handleKeyDown}
+          onShortcut={applyShortcut}
+          onUpload={onUpload}
+          onDragStart={() => setDragging(block.id)}
+          onDragEnd={() => {
+            setDragging(null);
+            setDropTarget(null);
+          }}
+          onDragOverBlock={() => setDropTarget(block.id)}
+          onDrop={() => {
+            if (dragging) move(dragging, block.id);
+            setDragging(null);
+            setDropTarget(null);
+          }}
+        />
       ))}
+
+      {!readOnly && (
+        // A generous click target below the last block, so clicking empty space
+        // under a short document starts a new paragraph.
+        <button
+          onClick={() => {
+            const last = blocks[blocks.length - 1];
+            if (last && !last.content.trim() && last.type === "text") {
+              focus(last.id, "end");
+            } else if (last) {
+              insertAfter(last.id);
+            }
+          }}
+          className="group mt-1 flex min-h-[140px] w-full items-start pt-3 text-left"
+          aria-label="Add a block"
+        >
+          <span className="flex items-center gap-2 text-[15px] text-transparent transition-colors group-hover:text-ink-4">
+            <Plus className="size-4" />
+            Click to keep writing
+          </span>
+        </button>
+      )}
     </div>
   );
 }
 
-function EditableBlock({
-  block, idx, blockRefs, onInput, onKeyDown, onUpdate, onImageUpload, onFocus, onBlur,
-  className: extraClass, tag: Tag = "div",
-}: {
-  block: Block; idx: number;
-  blockRefs: React.MutableRefObject<Map<string, HTMLElement>>;
-  onInput: (idx: number, el: HTMLElement) => void;
-  onKeyDown: (e: KeyboardEvent, idx: number) => void;
-  onUpdate: (updates: Partial<Block>) => void;
-  onImageUpload: (file: File) => Promise<string | null>;
-  onFocus: () => void; onBlur: () => void;
-  className?: string; tag?: "div" | "h1" | "h2" | "h3";
-}) {
-  const localRef = useRef<HTMLElement | null>(null);
-  const initializedRef = useRef<string | null>(null);
+/* ── One block ────────────────────────────────────────────────────────── */
 
-  const setRef = useCallback((el: HTMLElement | null) => {
-    localRef.current = el;
-    if (el) {
-      blockRefs.current.set(block.id, el);
-      // Set content only once on mount or when block id changes
-      if (initializedRef.current !== block.id) {
-        initializedRef.current = block.id;
-        if (el.textContent !== block.content) {
-          el.textContent = block.content;
-        }
-      }
+interface BlockRowProps {
+  block: Block;
+  index: number;
+  blocks: Block[];
+  readOnly: boolean;
+  focusRequest: FocusRequest | null;
+  slashOpen: boolean;
+  dragging: boolean;
+  isDropTarget: boolean;
+  onOpenSlash: (open: boolean) => void;
+  onUpdate: (id: string, patch: Partial<Block>) => void;
+  onInsertAfter: (id: string, type?: BlockType, content?: string) => string | undefined;
+  onRemove: (id: string) => void;
+  onFocusBlock: (id: string, at?: "start" | "end") => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>, block: Block) => void;
+  onShortcut: (block: Block, text: string, element: HTMLElement) => boolean;
+  onUpload?: (file: File) => Promise<string | null>;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverBlock: () => void;
+  onDrop: () => void;
+}
+
+const BlockRow = memo(function BlockRow({
+  block,
+  index,
+  blocks,
+  readOnly,
+  focusRequest,
+  slashOpen,
+  dragging,
+  isDropTarget,
+  onOpenSlash,
+  onUpdate,
+  onInsertAfter,
+  onRemove,
+  onFocusBlock,
+  onKeyDown,
+  onShortcut,
+  onUpload,
+  onDragStart,
+  onDragEnd,
+  onDragOverBlock,
+  onDrop,
+}: BlockRowProps) {
+  const editableRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  /**
+   * Seed the element's text exactly once per block identity. Re-running this
+   * on every content change would fight the caret.
+   */
+  useEffect(() => {
+    const el = editableRef.current;
+    if (!el) return;
+    if (document.activeElement === el) return;
+    if (el.textContent !== block.content) el.textContent = block.content;
+    // block.content is intentionally omitted: see the comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.id]);
+
+  // Honour a focus request from the parent, placing the caret precisely.
+  useEffect(() => {
+    if (!focusRequest) return;
+    const el = editableRef.current;
+    if (!el) return;
+
+    el.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+
+    if (!el.firstChild) {
+      range.setStart(el, 0);
+    } else if (focusRequest.at === "start") {
+      range.setStart(el.firstChild, 0);
     } else {
-      blockRefs.current.delete(block.id);
+      range.selectNodeContents(el);
+      range.collapse(false);
     }
-  }, [block.id, block.content, blockRefs]);
+    range.collapse(focusRequest.at === "start");
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [focusRequest]);
 
-  const style: React.CSSProperties = {};
-  if (block.color) style.color = block.color;
-  if (block.bgColor) style.backgroundColor = block.bgColor;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    const id = setTimeout(() => window.addEventListener("click", close), 0);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener("click", close);
+    };
+  }, [menuOpen]);
+
+  const handleInput = useCallback(() => {
+    const el = editableRef.current;
+    if (!el) return;
+    const text = el.textContent ?? "";
+
+    if (onShortcut(block, text, el)) return;
+
+    if (text === "/" && block.type === "text") {
+      onOpenSlash(true);
+    } else if (slashOpen && !text.startsWith("/")) {
+      onOpenSlash(false);
+    }
+
+    onUpdate(block.id, { content: text });
+  }, [block, onShortcut, onUpdate, onOpenSlash, slashOpen]);
+
+  const convert = useCallback(
+    (type: BlockType) => {
+      onOpenSlash(false);
+      const el = editableRef.current;
+      if (el) el.textContent = "";
+      onUpdate(block.id, {
+        type,
+        content: "",
+        ...(type === "todo" ? { checked: false } : {}),
+      });
+      if (type === "divider" || type === "image") {
+        onInsertAfter(block.id);
+      } else {
+        onFocusBlock(block.id, "end");
+      }
+    },
+    [block.id, onUpdate, onOpenSlash, onInsertAfter, onFocusBlock],
+  );
+
+  /* ── Non-text blocks ──────────────────────────────────────────────── */
+
+  if (block.type === "divider") {
+    return (
+      <Row
+        block={block}
+        readOnly={readOnly}
+        dragging={dragging}
+        isDropTarget={isDropTarget}
+        menuOpen={menuOpen}
+        setMenuOpen={setMenuOpen}
+        onConvert={convert}
+        onRemove={onRemove}
+        onInsertAfter={onInsertAfter}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOverBlock={onDragOverBlock}
+        onDrop={onDrop}
+      >
+        <div className="py-3.5">
+          <hr className="border-t border-line" />
+        </div>
+      </Row>
+    );
+  }
+
+  if (block.type === "image") {
+    return (
+      <Row
+        block={block}
+        readOnly={readOnly}
+        dragging={dragging}
+        isDropTarget={isDropTarget}
+        menuOpen={menuOpen}
+        setMenuOpen={setMenuOpen}
+        onConvert={convert}
+        onRemove={onRemove}
+        onInsertAfter={onInsertAfter}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOverBlock={onDragOverBlock}
+        onDrop={onDrop}
+      >
+        <ImageBlock
+          block={block}
+          readOnly={readOnly}
+          onUpdate={onUpdate}
+          onUpload={onUpload}
+        />
+      </Row>
+    );
+  }
+
+  /* ── Editable blocks ──────────────────────────────────────────────── */
+
+  const isEmpty = !block.content;
+  const numberInList =
+    block.type === "numbered_list"
+      ? countPrecedingListItems(blocks, index)
+      : 0;
 
   return (
-    <Tag
-      ref={setRef as React.Ref<HTMLHeadingElement & HTMLDivElement>}
-      contentEditable
-      suppressContentEditableWarning
-      className={extraClass}
-      style={style}
-      onInput={(e: React.FormEvent<HTMLElement>) => onInput(idx, e.currentTarget)}
-      onKeyDown={(e: React.KeyboardEvent<HTMLElement>) => onKeyDown(e as unknown as KeyboardEvent, idx)}
-      onFocus={onFocus}
-      onBlur={onBlur}
-      onPaste={async (e: React.ClipboardEvent) => {
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        for (const item of Array.from(items)) {
-          if (item.type.startsWith("image/")) {
-            e.preventDefault();
-            const file = item.getAsFile();
-            if (!file) return;
-            const url = await onImageUpload(file);
-            if (url) onUpdate({ type: "image", imageUrl: url, content: "" });
+    <Row
+      block={block}
+      readOnly={readOnly}
+      dragging={dragging}
+      isDropTarget={isDropTarget}
+      menuOpen={menuOpen}
+      setMenuOpen={setMenuOpen}
+      onConvert={convert}
+      onRemove={onRemove}
+      onInsertAfter={onInsertAfter}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOverBlock={onDragOverBlock}
+      onDrop={onDrop}
+    >
+      <div
+        className={cn(
+          "relative flex gap-2",
+          block.type === "callout" &&
+            "rounded-lg border border-line bg-flame-tint/60 px-3.5 py-3",
+          block.type === "quote" && "border-l-2 border-flame pl-4",
+          block.type === "code" &&
+            "rounded-lg border border-line bg-paper-sunk px-3.5 py-3",
+        )}
+      >
+        {block.type === "todo" && (
+          <button
+            onClick={() => onUpdate(block.id, { checked: !block.checked })}
+            disabled={readOnly}
+            role="checkbox"
+            aria-checked={Boolean(block.checked)}
+            aria-label={block.content || "To-do"}
+            className={cn(
+              "press mt-[5px] flex size-[17px] shrink-0 items-center justify-center rounded-[5px] border transition-colors [--press-depth:1px]",
+              block.checked
+                ? "border-flame bg-flame"
+                : "border-line-strong bg-card hover:border-flame",
+            )}
+          >
+            <AnimatePresence>
+              {block.checked && (
+                <motion.svg
+                  viewBox="0 0 12 12"
+                  className="size-2.5"
+                  initial={{ scale: 0.4, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.4, opacity: 0 }}
+                  transition={pop}
+                >
+                  <path
+                    d="M2.5 6.3 4.8 8.7 9.5 3.3"
+                    fill="none"
+                    stroke="var(--flame-ink)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </motion.svg>
+              )}
+            </AnimatePresence>
+          </button>
+        )}
+
+        {block.type === "bulleted_list" && (
+          <span className="mt-[9px] size-[5px] shrink-0 rounded-full bg-ink-3" aria-hidden />
+        )}
+
+        {block.type === "numbered_list" && (
+          <span className="mt-[2px] w-4 shrink-0 text-[15px] tabular-nums text-ink-4" aria-hidden>
+            {numberInList}.
+          </span>
+        )}
+
+        <div
+          ref={editableRef}
+          contentEditable={!readOnly}
+          suppressContentEditableWarning
+          role="textbox"
+          aria-multiline={block.type === "code"}
+          spellCheck={block.type !== "code"}
+          data-placeholder={
+            isEmpty && !readOnly ? placeholderFor(block.type, index === 0) : undefined
           }
-        }
+          onInput={handleInput}
+          onKeyDown={(e) => onKeyDown(e, block)}
+          onBlur={() => onOpenSlash(false)}
+          onPaste={(e) => {
+            // Paste as plain text: HTML from another app would drag its own
+            // fonts and colours into a carefully set document.
+            e.preventDefault();
+            const text = e.clipboardData.getData("text/plain");
+            document.execCommand("insertText", false, text);
+          }}
+          className={cn(
+            "min-w-0 flex-1 whitespace-pre-wrap break-words outline-none",
+            textClassFor(block.type),
+            block.type === "todo" && block.checked && "text-ink-4 line-through",
+          )}
+        />
+
+        <AnimatePresence>
+          {slashOpen && <SlashMenu onPick={convert} />}
+        </AnimatePresence>
+      </div>
+    </Row>
+  );
+});
+
+/* ── Row chrome: drag handle, add and options ─────────────────────────── */
+
+function Row({
+  block,
+  readOnly,
+  dragging,
+  isDropTarget,
+  menuOpen,
+  setMenuOpen,
+  onConvert,
+  onRemove,
+  onInsertAfter,
+  onDragStart,
+  onDragEnd,
+  onDragOverBlock,
+  onDrop,
+  children,
+}: {
+  block: Block;
+  readOnly: boolean;
+  dragging: boolean;
+  isDropTarget: boolean;
+  menuOpen: boolean;
+  setMenuOpen: (open: boolean) => void;
+  onConvert: (type: BlockType) => void;
+  onRemove: (id: string) => void;
+  onInsertAfter: (id: string) => string | undefined;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverBlock: () => void;
+  onDrop: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      onDragOver={(e) => {
+        if (readOnly) return;
+        e.preventDefault();
+        onDragOverBlock();
       }}
-    />
+      onDrop={(e) => {
+        if (readOnly) return;
+        e.preventDefault();
+        onDrop();
+      }}
+      className={cn(
+        "group relative -ml-16 flex items-start pl-16 transition-opacity",
+        dragging && "opacity-40",
+      )}
+    >
+      {/* Drop indicator */}
+      {isDropTarget && !dragging && (
+        <span className="pointer-events-none absolute inset-x-16 -top-px h-0.5 rounded-full bg-flame" />
+      )}
+
+      {!readOnly && (
+        <div className="absolute left-8 top-0.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <button
+            onClick={() => onInsertAfter(block.id)}
+            aria-label="Add block below"
+            className="rounded p-1 text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink"
+          >
+            <Plus className="size-3.5" />
+          </button>
+          <button
+            draggable
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen(!menuOpen);
+            }}
+            aria-label="Block options, or drag to move"
+            className="cursor-grab rounded p-1 text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink active:cursor-grabbing"
+          >
+            <GripVertical className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      <div className="min-w-0 flex-1 py-[3px]">{children}</div>
+
+      <AnimatePresence>
+        {menuOpen && (
+          <motion.div
+            variants={menu}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute left-8 top-8 z-50 max-h-[320px] w-[248px] overflow-y-auto rounded-xl border border-line bg-card p-1.5"
+            style={{ boxShadow: "var(--lift-lg)" }}
+          >
+            <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">Turn into</p>
+            {BLOCK_TYPES.map((spec) => (
+              <button
+                key={spec.type}
+                onClick={() => {
+                  onConvert(spec.type);
+                  setMenuOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors",
+                  block.type === spec.type
+                    ? "bg-flame-tint text-flame"
+                    : "text-ink-2 hover:bg-paper-sunk",
+                )}
+              >
+                <spec.Icon className="size-3.5 shrink-0" />
+                {spec.label}
+              </button>
+            ))}
+            <div className="my-1 border-t border-line" />
+            <button
+              onClick={() => {
+                onRemove(block.id);
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-danger transition-colors hover:bg-danger-tint"
+            >
+              <Trash2 className="size-3.5" />
+              Delete block
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
-function BlockRenderer(props: {
-  block: Block; idx: number;
-  blockRefs: React.MutableRefObject<Map<string, HTMLElement>>;
-  onInput: (idx: number, el: HTMLElement) => void;
-  onKeyDown: (e: KeyboardEvent, idx: number) => void;
-  onUpdate: (updates: Partial<Block>) => void;
-  onImageUpload: (file: File) => Promise<string | null>;
-  onFocus: () => void; onBlur: () => void;
-  onMoveUp?: () => void; onMoveDown?: () => void; onDelete?: () => void;
-}) {
-  const { block, onUpdate, onImageUpload, onMoveUp, onMoveDown, onDelete } = props;
+/* ── Slash menu ───────────────────────────────────────────────────────── */
 
-  switch (block.type) {
-    case "h1":
-      return <EditableBlock {...props} tag="h1" className={cn("text-2xl font-bold tracking-tight outline-none py-1 min-h-[2.5rem]", block.bgColor && "px-2 rounded-lg")} />;
-    case "h2":
-      return <EditableBlock {...props} tag="h2" className={cn("text-xl font-semibold tracking-tight outline-none py-1 min-h-[2rem]", block.bgColor && "px-2 rounded-lg")} />;
-    case "h3":
-      return <EditableBlock {...props} tag="h3" className={cn("text-lg font-semibold outline-none py-0.5 min-h-[1.75rem]", block.bgColor && "px-2 rounded-lg")} />;
-    case "bulleted_list":
-      return (
-        <div className={cn("flex items-start gap-2 py-0.5", block.bgColor && "px-2 rounded-lg")} style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/60" />
-          <EditableBlock {...props} className="flex-1 text-[15px] leading-7 outline-none min-h-[1.75rem]" />
-        </div>
-      );
-    case "numbered_list":
-      return (
-        <div className={cn("flex items-start gap-2 py-0.5", block.bgColor && "px-2 rounded-lg")} style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <span className="mt-0.5 shrink-0 text-sm text-muted-foreground tabular-nums">{props.idx + 1}.</span>
-          <EditableBlock {...props} className="flex-1 text-[15px] leading-7 outline-none min-h-[1.75rem]" />
-        </div>
-      );
-    case "todo":
-      return (
-        <div className={cn("flex items-start gap-2 py-0.5", block.bgColor && "px-2 rounded-lg")} style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <button onClick={() => onUpdate({ checked: !block.checked })} className="mt-1.5 shrink-0">
-            <div className={cn("h-4 w-4 rounded border-2 transition-colors", block.checked ? "border-accent bg-accent" : "border-border")}>
-              {block.checked && <svg viewBox="0 0 12 12" className="h-full w-full text-white"><path d="M3 6l2 2 4-4" stroke="currentColor" strokeWidth="2" fill="none" /></svg>}
-            </div>
-          </button>
-          <EditableBlock {...props} className={cn("flex-1 text-[15px] leading-7 outline-none min-h-[1.75rem]", block.checked && "line-through text-muted-foreground")} />
-        </div>
-      );
-    case "quote":
-      return (
-        <div className="border-l-3 border-foreground/30 pl-4 py-0.5" style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <EditableBlock {...props} className="text-[15px] leading-7 text-foreground/80 italic outline-none min-h-[1.75rem]" />
-        </div>
-      );
-    case "callout":
-      return (
-        <div className="flex items-start gap-3 rounded-xl bg-muted px-4 py-3" style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <span className="mt-0.5 text-lg">💡</span>
-          <EditableBlock {...props} className="flex-1 text-[15px] leading-7 outline-none min-h-[1.75rem]" />
-        </div>
-      );
-    case "divider":
-      return <hr className="my-3 border-border" />;
-    case "code":
-      return (
-        <div className="rounded-xl bg-muted/80 px-4 py-3 font-mono" style={block.bgColor ? { backgroundColor: block.bgColor } : undefined}>
-          <EditableBlock {...props} className="text-sm leading-6 outline-none whitespace-pre-wrap min-h-[1.5rem]" />
-        </div>
-      );
-    case "image":
-      if (block.imageUrl) {
-        return (
-          <div className="group/img relative overflow-hidden rounded-xl border border-border my-1">
-            <img src={block.imageUrl} alt="" className="w-full" />
-            <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover/img:opacity-100">
-              {onMoveUp && (
-                <button onClick={onMoveUp} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-black/80" title="Move up">
-                  <ArrowUp className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {onMoveDown && (
-                <button onClick={onMoveDown} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-black/80" title="Move down">
-                  <ArrowDown className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {onDelete && (
-                <button onClick={onDelete} className="rounded-lg bg-red-600/80 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-red-600" title="Delete">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      }
-      return (
+function SlashMenu({ onPick }: { onPick: (type: BlockType) => void }) {
+  return (
+    <motion.div
+      variants={menu}
+      initial="hidden"
+      animate="show"
+      exit="exit"
+      className="absolute left-0 top-full z-50 mt-1.5 max-h-[300px] w-[268px] overflow-y-auto rounded-xl border border-line bg-card p-1.5"
+      style={{ boxShadow: "var(--lift-lg)" }}
+      // Keeps the caret in the block: blurring would close this menu.
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">Insert a block</p>
+      {BLOCK_TYPES.map((spec) => (
         <button
-          onClick={async () => {
-            const input = document.createElement("input");
-            input.type = "file"; input.accept = "image/*";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (file) { const url = await onImageUpload(file); if (url) onUpdate({ imageUrl: url }); }
-            };
-            input.click();
-          }}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-8 text-sm text-muted-foreground transition-colors hover:border-accent hover:text-foreground"
+          key={spec.type}
+          onClick={() => onPick(spec.type)}
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-paper-sunk"
         >
-          <ImageIcon className="h-5 w-5" /> Click to upload image
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-paper-sunk">
+            <spec.Icon className="size-3.5 text-ink-3" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-ink">{spec.label}</span>
+            <span className="block truncate text-[11px] text-ink-4">{spec.hint}</span>
+          </span>
+          {spec.shortcut && (
+            <kbd className="shrink-0 rounded border border-line bg-paper-sunk px-1.5 py-0.5 font-mono text-[10px] text-ink-4">
+              {spec.shortcut.trim()}
+            </kbd>
+          )}
         </button>
-      );
+      ))}
+    </motion.div>
+  );
+}
+
+/* ── Image block ──────────────────────────────────────────────────────── */
+
+function ImageBlock({
+  block,
+  readOnly,
+  onUpdate,
+  onUpload,
+}: {
+  block: Block;
+  readOnly: boolean;
+  onUpdate: (id: string, patch: Partial<Block>) => void;
+  onUpload?: (file: File) => Promise<string | null>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const pick = async (file: File) => {
+    if (!onUpload) return;
+    setBusy(true);
+    setProblem(null);
+    const url = await onUpload(file);
+    setBusy(false);
+    if (url) onUpdate(block.id, { imageUrl: url });
+    else setProblem("That image could not be uploaded.");
+  };
+
+  if (block.imageUrl) {
+    return (
+      <figure className="my-2">
+        {/* A plain img, not next/image: these are arbitrary user uploads on a
+            Supabase public URL, and the optimiser would need every project's
+            hostname whitelisted at build time. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={block.imageUrl}
+          alt={block.caption || ""}
+          loading="lazy"
+          className="w-full rounded-lg border border-line"
+        />
+        {!readOnly ? (
+          <input
+            defaultValue={block.caption ?? ""}
+            onBlur={(e) => onUpdate(block.id, { caption: e.target.value })}
+            placeholder="Add a caption…"
+            className="mt-2 w-full bg-transparent text-center text-[13px] text-ink-3 outline-none placeholder:text-ink-4"
+            aria-label="Image caption"
+          />
+        ) : (
+          block.caption && (
+            <figcaption className="mt-2 text-center text-[13px] text-ink-3">
+              {block.caption}
+            </figcaption>
+          )
+        )}
+      </figure>
+    );
+  }
+
+  if (readOnly) return null;
+
+  return (
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files?.[0];
+        if (file) void pick(file);
+      }}
+      className="my-1 rounded-lg border border-dashed border-line-strong bg-paper-sunk px-4 py-8 text-center"
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void pick(file);
+        }}
+      />
+      <ImageIcon className="mx-auto size-5 text-ink-4" />
+      <p className="mt-2 text-[13px] text-ink-3">
+        {busy ? "Uploading…" : "Drop an image here, or"}{" "}
+        {!busy && (
+          <button
+            onClick={() => inputRef.current?.click()}
+            className="font-medium text-flame underline-offset-2 hover:underline"
+          >
+            choose a file
+          </button>
+        )}
+      </p>
+      {problem && <p className="mt-1.5 text-[12px] text-danger">{problem}</p>}
+    </div>
+  );
+}
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+
+function textClassFor(type: BlockType): string {
+  switch (type) {
+    case "h1":
+      return "font-display text-[2rem] font-semibold leading-tight tracking-tight text-ink mt-5";
+    case "h2":
+      return "font-display text-[1.5rem] font-semibold leading-snug tracking-tight text-ink mt-4";
+    case "h3":
+      return "font-display text-[1.2rem] font-semibold leading-snug tracking-tight text-ink mt-3";
+    case "quote":
+      return "text-[16px] italic leading-relaxed text-ink-2";
+    case "callout":
+      return "text-[15px] leading-relaxed text-ink-2";
+    case "code":
+      return "font-mono text-[13px] leading-relaxed text-ink-2";
     default:
-      return <EditableBlock {...props} className={cn("text-[15px] leading-7 outline-none py-0.5 min-h-[1.75rem]", block.bgColor && "px-2 rounded-lg")} />;
+      return "text-[16px] leading-[1.7] text-ink-2";
   }
 }
+
+function placeholderFor(type: BlockType, isFirst: boolean): string {
+  switch (type) {
+    case "h1":
+      return "Heading 1";
+    case "h2":
+      return "Heading 2";
+    case "h3":
+      return "Heading 3";
+    case "todo":
+      return "To-do";
+    case "bulleted_list":
+    case "numbered_list":
+      return "List item";
+    case "quote":
+      return "Quote";
+    case "callout":
+      return "Something worth calling out";
+    case "code":
+      return "Code";
+    default:
+      return isFirst ? "Start writing, or press / for blocks…" : "Press / for blocks…";
+  }
+}
+
+/** Numbering restarts whenever a non-list block interrupts the run. */
+function countPrecedingListItems(blocks: Block[], index: number): number {
+  let n = 1;
+  for (let i = index - 1; i >= 0; i--) {
+    if (blocks[i].type !== "numbered_list") break;
+    n += 1;
+  }
+  return n;
+}
+
+export { BLOCK_TYPES };
