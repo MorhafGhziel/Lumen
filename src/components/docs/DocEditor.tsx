@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ChevronDown,
   Check,
+  MoreHorizontal,
+  PanelLeft,
   Copy,
   AlignLeft,
   Lightbulb,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { BlockEditor } from "@/components/docs/BlockEditor";
 import { PageIcon, PAGE_ICONS } from "@/components/app/PageIcon";
+import { SyncBadge } from "@/components/app/SyncBadge";
 import { MiniDoc } from "@/components/graphics/UiFragments";
 import { CurvedArrow } from "@/components/graphics/Doodles";
 import { Button } from "@/components/ui/Button";
@@ -35,7 +37,7 @@ import {
   serializeBlocks,
   wordCount,
 } from "@/lib/blocks";
-import type { AiAction, Block, Comment, DocPage } from "@/lib/types";
+import type { AiAction, Block, Comment, DocPage, SyncStatus } from "@/lib/types";
 import type { useImageUpload } from "@/hooks/useImageUpload";
 import { cn } from "@/lib/utils";
 import { inlineToPlainText } from "@/lib/richtext";
@@ -61,6 +63,11 @@ interface DocEditorProps {
   onDeleteComment: (id: string) => void;
   upload: ReturnType<typeof useImageUpload>;
   userId: string;
+  status: SyncStatus;
+  onToggleAi: () => void;
+  aiPanelOpen: boolean;
+  sidebarCollapsed: boolean;
+  onShowSidebar: () => void;
 }
 
 export function DocEditor({
@@ -74,6 +81,11 @@ export function DocEditor({
   onDeleteComment,
   upload,
   userId,
+  status,
+  onToggleAi,
+  aiPanelOpen,
+  sidebarCollapsed,
+  onShowSidebar,
 }: DocEditorProps) {
   const [blocks, setBlocks] = useState<Block[]>(() => parseBlocks(page?.content ?? ""));
   const [aiBusy, setAiBusy] = useState<AiAction | null>(null);
@@ -83,7 +95,7 @@ export function DocEditor({
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [wide, setWide] = useState(false);
 
@@ -105,12 +117,12 @@ export function DocEditor({
   }, [page, onLoadComments]);
 
   useEffect(() => {
-    if (!iconOpen && !shareOpen && !aiOpen) return;
+    if (!iconOpen && !shareOpen && !moreOpen) return;
     const close = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest("[data-popover]")) {
         setIconOpen(false);
         setShareOpen(false);
-        setAiOpen(false);
+        setMoreOpen(false);
       }
     };
     const id = setTimeout(() => window.addEventListener("click", close), 0);
@@ -118,7 +130,7 @@ export function DocEditor({
       clearTimeout(id);
       window.removeEventListener("click", close);
     };
-  }, [iconOpen, shareOpen, aiOpen]);
+  }, [iconOpen, shareOpen, moreOpen]);
 
   const handleBlocks = useCallback(
     (next: Block[]) => {
@@ -267,93 +279,52 @@ export function DocEditor({
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      {/* Toolbar */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-line px-4 py-1.5">
-        {/* Six permanent AI buttons occupied the whole bar and were the loudest
-            thing on a page you had not written yet. One button, opened on
-            demand, says the same thing and gets out of the way. */}
-        <div className="relative" data-popover>
+      {/* One header row.
+          There used to be two bands of chrome stacked above every page: a mode
+          switcher, then six AI buttons and a row of unlabelled icons. The mode
+          switcher moved to the sidebar, the AI actions collapsed into one
+          button, and everything you touch rarely lives behind the overflow
+          menu. What is left is the page you are on and the three things you
+          actually do to it. */}
+      <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-card px-3">
+        {sidebarCollapsed && (
           <button
-            onClick={() => setAiOpen((v) => !v)}
-            disabled={aiBusy !== null}
-            aria-expanded={aiOpen}
+            onClick={onShowSidebar}
+            aria-label="Show sidebar"
+            className="press rounded-lg p-1.5 text-ink-4 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
+          >
+            <PanelLeft className="size-4" />
+          </button>
+        )}
+
+        <PageIcon name={page.icon} className="size-4 shrink-0 text-flame" />
+        <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">
+          {page.title || "Untitled"}
+        </h1>
+        <SyncBadge status={status} />
+
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            onClick={onToggleAi}
+            title="Ask Lumen — Ctrl J"
             className={cn(
               "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors [--press-depth:1px]",
-              aiBusy || aiOpen
+              aiPanelOpen
                 ? "bg-flame-tint text-flame"
                 : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
             )}
           >
-            {aiBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {aiBusy ? AI_ACTIONS.find((a) => a.id === aiBusy)?.label : "Ask AI"}
-            <ChevronDown className={cn("size-3 transition-transform", aiOpen && "rotate-180")} />
+            <Sparkles className="size-3.5" />
+            Ask AI
           </button>
 
-          <AnimatePresence>
-            {aiOpen && (
-              <motion.div
-                variants={menu}
-                initial="hidden"
-                animate="show"
-                exit="exit"
-                className="absolute left-0 top-full z-50 mt-1.5 w-[230px] rounded-xl border border-line bg-card p-1.5"
-                style={{ boxShadow: "var(--lift-lg)" }}
-              >
-                <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">Rewrite this page</p>
-                {AI_ACTIONS.map((action) => (
-                  <button
-                    key={action.id}
-                    onClick={() => {
-                      setAiOpen(false);
-                      void runAi(action.id);
-                    }}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-paper-sunk hover:text-ink"
-                  >
-                    <action.Icon className="size-3.5 text-ink-4" />
-                    {action.label}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        <span className="mx-1 h-4 w-px bg-line" />
-
-        <button
-          onClick={() => setOutlineOpen((v) => !v)}
-          title="Outline"
-          aria-label="Outline"
-          aria-pressed={outlineOpen}
-          className={cn(
-            "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
-            outlineOpen ? "bg-paper-sunk text-ink" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
-          )}
-        >
-          <ListTree className="size-3.5" />
-        </button>
-
-        <button
-          onClick={() => setWide((v) => !v)}
-          title={wide ? "Narrow the page" : "Widen the page"}
-          aria-label={wide ? "Narrow the page" : "Widen the page"}
-          aria-pressed={wide}
-          className={cn(
-            "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
-            wide ? "bg-paper-sunk text-ink" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
-          )}
-        >
-          {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-        </button>
-
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
             onClick={() => setCommentsOpen((v) => !v)}
+            title="Comments"
+            aria-label="Comments"
             className={cn(
               "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
-              commentsOpen
-                ? "bg-paper-sunk text-ink"
-                : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+              commentsOpen ? "bg-paper-sunk text-ink" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
             )}
           >
             <MessageSquare className="size-3.5" />
@@ -442,8 +413,98 @@ export function DocEditor({
               )}
             </AnimatePresence>
           </div>
+
+          {/* Everything used occasionally, in one place, with words on it. */}
+          <div className="relative" data-popover>
+            <button
+              onClick={() => setMoreOpen((v) => !v)}
+              title="More"
+              aria-label="More options"
+              aria-expanded={moreOpen}
+              className="press rounded-lg p-1.5 text-ink-3 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
+            >
+              <MoreHorizontal className="size-4" />
+            </button>
+
+            <AnimatePresence>
+              {moreOpen && (
+                <motion.div
+                  variants={menu}
+                  initial="hidden"
+                  animate="show"
+                  exit="exit"
+                  className="absolute right-0 top-full z-50 mt-1.5 w-[240px] rounded-xl border border-line bg-card p-1.5"
+                  style={{ boxShadow: "var(--lift-lg)" }}
+                >
+                  <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">Rewrite with AI</p>
+                  {AI_ACTIONS.map((action) => (
+                    <MoreItem
+                      key={action.id}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        void runAi(action.id);
+                      }}
+                      Icon={action.Icon}
+                      label={action.label}
+                      busy={aiBusy === action.id}
+                    />
+                  ))}
+
+                  <div className="my-1 border-t border-line" />
+                  <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">This page</p>
+
+                  <MoreItem
+                    onClick={() => {
+                      setOutlineOpen((v) => !v);
+                      setMoreOpen(false);
+                    }}
+                    Icon={ListTree}
+                    label={outlineOpen ? "Hide outline" : "Show outline"}
+                  />
+                  <MoreItem
+                    onClick={() => {
+                      setWide((v) => !v);
+                      setMoreOpen(false);
+                    }}
+                    Icon={wide ? Minimize2 : Maximize2}
+                    label={wide ? "Use a narrow column" : "Use the full width"}
+                  />
+                  <label className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-paper-sunk hover:text-ink">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        setMoreOpen(false);
+                        if (!file) return;
+                        const url = await upload.upload(file);
+                        if (url) onUpdate(page.id, { cover_url: url });
+                      }}
+                    />
+                    {upload.uploading ? (
+                      <Loader2 className="size-3.5 animate-spin text-ink-4" />
+                    ) : (
+                      <ImagePlus className="size-3.5 text-ink-4" />
+                    )}
+                    {page.cover_url ? "Replace the cover" : "Add a cover"}
+                  </label>
+                  {page.cover_url && (
+                    <MoreItem
+                      onClick={() => {
+                        onUpdate(page.id, { cover_url: null });
+                        setMoreOpen(false);
+                      }}
+                      Icon={Trash2}
+                      label="Remove the cover"
+                    />
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
-      </div>
+      </header>
 
       <div className="flex min-h-0 flex-1">
         {/* Document */}
@@ -510,27 +571,9 @@ export function DocEditor({
                 </AnimatePresence>
               </div>
 
-              {!page.cover_url && (
-                <label className="press flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] text-ink-4 transition-colors hover:bg-paper-sunk hover:text-ink [--press-depth:1px]">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="sr-only"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const url = await upload.upload(file);
-                      if (url) onUpdate(page.id, { cover_url: url });
-                    }}
-                  />
-                  {upload.uploading ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <ImagePlus className="size-3.5" />
-                  )}
-                  Add cover
-                </label>
-              )}
+              {/* Covers are set from the overflow menu. Having the control in
+                  two places meant two ways to do one rare thing, permanently
+                  parked above the title. */}
             </div>
 
             {/* Title */}
@@ -643,6 +686,36 @@ export function DocEditor({
         </AnimatePresence>
       </div>
     </div>
+  );
+}
+
+/* ── Overflow menu row ────────────────────────────────────────────────── */
+
+/** Every entry carries a word. An icon alone is a guess. */
+function MoreItem({
+  onClick,
+  Icon,
+  label,
+  busy,
+}: {
+  onClick: () => void;
+  Icon: typeof Sparkles;
+  label: string;
+  busy?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-paper-sunk hover:text-ink disabled:opacity-60"
+    >
+      {busy ? (
+        <Loader2 className="size-3.5 animate-spin text-flame" />
+      ) : (
+        <Icon className="size-3.5 text-ink-4" />
+      )}
+      {label}
+    </button>
   );
 }
 
