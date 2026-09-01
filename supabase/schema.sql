@@ -114,6 +114,22 @@ begin
 end
 $$;
 
+-- Pages nest inside pages.
+--
+-- There used to be two separate hierarchies: folders held pages, and pages
+-- held nothing. That meant two things to learn, two ways to organise, and no
+-- way to put a page inside a page. One tree replaces both.
+alter table public.pages
+  add column if not exists parent_id uuid references public.pages(id) on delete cascade;
+
+-- Deleting is now reversible. It was permanent and instant, which is a hostile
+-- thing to do to somebody's writing.
+alter table public.pages add column if not exists deleted_at timestamptz;
+
+create index if not exists pages_parent_id_idx on public.pages (parent_id);
+create index if not exists pages_live_idx      on public.pages (user_id, updated_at desc)
+  where deleted_at is null;
+
 -- Give every page a share token up front. The old client generated one with
 -- Math.random() (8 chars, predictable) only at the moment of sharing; this is
 -- 96 bits of CSPRNG entropy and exists before it is ever needed.
@@ -275,6 +291,52 @@ $$;
 
 create index if not exists sticky_notes_page_id_idx    on public.sticky_notes (page_id);
 create index if not exists drawing_strokes_page_id_idx on public.drawing_strokes (page_id, created_at);
+
+
+-- =============================================================================
+-- 5c. Fold folders into the page tree
+-- =============================================================================
+-- Every folder becomes a page holding the pages that were in it. The folders
+-- table is left untouched rather than dropped, so this is reversible and no
+-- row is destroyed; the app simply stops reading it.
+
+do $$
+declare
+  f record;
+  new_page uuid;
+begin
+  -- Nothing to do on a fresh project, or on a second run.
+  if not exists (select 1 from information_schema.tables
+                 where table_schema = 'public' and table_name = 'folders') then
+    return;
+  end if;
+
+  for f in
+    select fo.id, fo.user_id, fo.name, fo.created_at
+    from public.folders fo
+    where exists (select 1 from public.pages p where p.folder_id = fo.id and p.parent_id is null)
+       or not exists (select 1 from public.pages p where p.parent_id is not null and p.title = fo.name)
+  loop
+    -- Skip a folder that has already been converted by an earlier run.
+    if exists (
+      select 1 from public.pages p
+      where p.user_id = f.user_id and p.title = f.name and p.icon = 'folder'
+    ) then
+      continue;
+    end if;
+
+    insert into public.pages (user_id, title, icon, kind, created_at)
+    values (f.user_id, f.name, 'folder', 'doc', f.created_at)
+    returning id into new_page;
+
+    update public.pages
+      set parent_id = new_page
+      where folder_id = f.id and parent_id is null and id <> new_page;
+
+    raise notice 'Folder "%" is now a page.', f.name;
+  end loop;
+end
+$$;
 
 
 -- =============================================================================

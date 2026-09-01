@@ -15,6 +15,10 @@ export interface Folder {
 export interface DocPage {
   id: string;
   kind: PageKind;
+  /** The page this one sits inside. Null means top level. */
+  parent_id: string | null;
+  /** Set while the page is in the trash. */
+  deleted_at: number | null;
   title: string;
   /** JSON-serialised Block[]. */
   content: string;

@@ -48,6 +48,9 @@ export type PageRow = {
   sort_order: number;
   /** "doc" or "canvas". */
   kind: string;
+  parent_id: string | null;
+  /** Set when the page is in the trash. */
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
