@@ -3,8 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ChevronDown,
   Check,
   Copy,
+  AlignLeft,
+  Lightbulb,
+  ListTree,
+  Maximize2,
+  SpellCheck,
+  Wand2,
+  Minimize2,
   Globe,
   ImagePlus,
   Loader2,
@@ -30,15 +38,16 @@ import {
 import type { AiAction, Block, Comment, DocPage } from "@/lib/types";
 import type { useImageUpload } from "@/hooks/useImageUpload";
 import { cn } from "@/lib/utils";
+import { inlineToPlainText } from "@/lib/richtext";
 import { menu, smooth, swift } from "@/lib/motion";
 
-const AI_ACTIONS: { id: AiAction; label: string }[] = [
-  { id: "summarize", label: "Summarise" },
-  { id: "improve", label: "Improve" },
-  { id: "expand", label: "Expand" },
-  { id: "fix", label: "Fix grammar" },
-  { id: "outline", label: "Outline" },
-  { id: "brainstorm", label: "Brainstorm" },
+const AI_ACTIONS: { id: AiAction; label: string; Icon: typeof Sparkles }[] = [
+  { id: "summarize", label: "Summarise", Icon: AlignLeft },
+  { id: "improve", label: "Improve the writing", Icon: Wand2 },
+  { id: "expand", label: "Expand on this", Icon: Maximize2 },
+  { id: "fix", label: "Fix grammar", Icon: SpellCheck },
+  { id: "outline", label: "Turn into an outline", Icon: ListTree },
+  { id: "brainstorm", label: "Brainstorm ideas", Icon: Lightbulb },
 ];
 
 interface DocEditorProps {
@@ -74,6 +83,9 @@ export function DocEditor({
   const [shareOpen, setShareOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [wide, setWide] = useState(false);
 
   const loadedPageId = useRef<string | null>(null);
 
@@ -93,11 +105,12 @@ export function DocEditor({
   }, [page, onLoadComments]);
 
   useEffect(() => {
-    if (!iconOpen && !shareOpen) return;
+    if (!iconOpen && !shareOpen && !aiOpen) return;
     const close = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest("[data-popover]")) {
         setIconOpen(false);
         setShareOpen(false);
+        setAiOpen(false);
       }
     };
     const id = setTimeout(() => window.addEventListener("click", close), 0);
@@ -105,7 +118,7 @@ export function DocEditor({
       clearTimeout(id);
       window.removeEventListener("click", close);
     };
-  }, [iconOpen, shareOpen]);
+  }, [iconOpen, shareOpen, aiOpen]);
 
   const handleBlocks = useCallback(
     (next: Block[]) => {
@@ -256,28 +269,82 @@ export function DocEditor({
     <div className="flex min-w-0 flex-1 flex-col">
       {/* Toolbar */}
       <div className="flex shrink-0 items-center gap-1 border-b border-line px-4 py-1.5">
-        <div className="flex items-center gap-0.5 overflow-x-auto">
-          {AI_ACTIONS.map((action) => (
-            <button
-              key={action.id}
-              onClick={() => void runAi(action.id)}
-              disabled={aiBusy !== null}
-              className={cn(
-                "press flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors [--press-depth:1px]",
-                aiBusy === action.id
-                  ? "bg-flame-tint text-flame"
-                  : "text-ink-3 hover:bg-paper-sunk hover:text-ink disabled:opacity-40",
-              )}
-            >
-              {aiBusy === action.id ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Sparkles className="size-3" />
-              )}
-              {action.label}
-            </button>
-          ))}
+        {/* Six permanent AI buttons occupied the whole bar and were the loudest
+            thing on a page you had not written yet. One button, opened on
+            demand, says the same thing and gets out of the way. */}
+        <div className="relative" data-popover>
+          <button
+            onClick={() => setAiOpen((v) => !v)}
+            disabled={aiBusy !== null}
+            aria-expanded={aiOpen}
+            className={cn(
+              "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors [--press-depth:1px]",
+              aiBusy || aiOpen
+                ? "bg-flame-tint text-flame"
+                : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+            )}
+          >
+            {aiBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+            {aiBusy ? AI_ACTIONS.find((a) => a.id === aiBusy)?.label : "Ask AI"}
+            <ChevronDown className={cn("size-3 transition-transform", aiOpen && "rotate-180")} />
+          </button>
+
+          <AnimatePresence>
+            {aiOpen && (
+              <motion.div
+                variants={menu}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+                className="absolute left-0 top-full z-50 mt-1.5 w-[230px] rounded-xl border border-line bg-card p-1.5"
+                style={{ boxShadow: "var(--lift-lg)" }}
+              >
+                <p className="label-mono px-2 pb-1 pt-0.5 text-[9px]">Rewrite this page</p>
+                {AI_ACTIONS.map((action) => (
+                  <button
+                    key={action.id}
+                    onClick={() => {
+                      setAiOpen(false);
+                      void runAi(action.id);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-paper-sunk hover:text-ink"
+                  >
+                    <action.Icon className="size-3.5 text-ink-4" />
+                    {action.label}
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
+
+        <span className="mx-1 h-4 w-px bg-line" />
+
+        <button
+          onClick={() => setOutlineOpen((v) => !v)}
+          title="Outline"
+          aria-label="Outline"
+          aria-pressed={outlineOpen}
+          className={cn(
+            "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
+            outlineOpen ? "bg-paper-sunk text-ink" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+          )}
+        >
+          <ListTree className="size-3.5" />
+        </button>
+
+        <button
+          onClick={() => setWide((v) => !v)}
+          title={wide ? "Narrow the page" : "Widen the page"}
+          aria-label={wide ? "Narrow the page" : "Widen the page"}
+          aria-pressed={wide}
+          className={cn(
+            "press flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] transition-colors [--press-depth:1px]",
+            wide ? "bg-paper-sunk text-ink" : "text-ink-3 hover:bg-paper-sunk hover:text-ink",
+          )}
+        >
+          {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+        </button>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
@@ -394,7 +461,7 @@ export function DocEditor({
             </div>
           )}
 
-          <div className={cn("mx-auto w-full max-w-[760px] px-8 pb-24", page.cover_url ? "pt-8" : "pt-12")}>
+          <div className={cn("mx-auto w-full px-8 pb-24 transition-[max-width] duration-300", wide ? "max-w-[1100px]" : "max-w-[760px]", page.cover_url ? "pt-8" : "pt-12")}>
             {/* Icon + cover controls */}
             <div className="mb-3 flex items-center gap-1">
               <div className="relative" data-popover>
@@ -537,6 +604,22 @@ export function DocEditor({
           </div>
         </div>
 
+        {/* Outline */}
+        <AnimatePresence>
+          {outlineOpen && (
+            <motion.aside
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 240, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={smooth}
+              className="shrink-0 overflow-hidden border-l border-line bg-card"
+              aria-label="Outline"
+            >
+              <Outline blocks={blocks} onClose={() => setOutlineOpen(false)} />
+            </motion.aside>
+          )}
+        </AnimatePresence>
+
         {/* Comments */}
         <AnimatePresence>
           {commentsOpen && (
@@ -559,6 +642,76 @@ export function DocEditor({
           )}
         </AnimatePresence>
       </div>
+    </div>
+  );
+}
+
+/* ── Outline ──────────────────────────────────────────────────────────── */
+
+/**
+ * Table of contents, built from the heading blocks.
+ *
+ * A long page previously had no navigation at all beyond scrolling. Clicking a
+ * heading scrolls the block into view; the editor already renders each block
+ * with its id as a data attribute, so no extra bookkeeping is needed.
+ */
+function Outline({ blocks, onClose }: { blocks: Block[]; onClose: () => void }) {
+  const headings = useMemo(
+    () =>
+      blocks
+        .filter((b) => b.type === "h1" || b.type === "h2" || b.type === "h3")
+        .map((b) => ({
+          id: b.id,
+          level: b.type === "h1" ? 1 : b.type === "h2" ? 2 : 3,
+          text: inlineToPlainText(b.content),
+        }))
+        .filter((h) => h.text.trim()),
+    [blocks],
+  );
+
+  return (
+    <div className="flex h-full w-[240px] flex-col">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
+        <ListTree className="size-3.5 text-ink-4" />
+        <h2 className="flex-1 text-[13px] font-semibold text-ink">Outline</h2>
+        <button
+          onClick={onClose}
+          aria-label="Close outline"
+          className="press rounded-lg p-1.5 text-ink-4 hover:bg-paper-sunk hover:text-ink [--press-depth:1px]"
+        >
+          <X className="size-4" />
+        </button>
+      </header>
+
+      <nav className="flex-1 overflow-y-auto p-2">
+        {headings.length === 0 ? (
+          <p className="px-2 py-8 text-center text-[13px] leading-relaxed text-ink-4">
+            Add a heading and it will show up here.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-0.5">
+            {headings.map((heading) => (
+              <li key={heading.id}>
+                <button
+                  onClick={() => {
+                    const el = document.querySelector(`[data-block-id="${heading.id}"]`);
+                    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    (el as HTMLElement | null)?.focus();
+                  }}
+                  className={cn(
+                    "block w-full truncate rounded-md px-2 py-1.5 text-left text-[13px] text-ink-3 transition-colors hover:bg-paper-sunk hover:text-ink",
+                    heading.level === 2 && "pl-5",
+                    heading.level === 3 && "pl-8 text-[12px]",
+                  )}
+                  title={heading.text}
+                >
+                  {heading.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </nav>
     </div>
   );
 }
